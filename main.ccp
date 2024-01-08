@@ -9,8 +9,6 @@
 
 int wire_cut = 0;
 float cell_voltage[18];     //most recent cell voltages
-unsigned long Time;
-
 
 void setup() {
   delay(3000);
@@ -33,8 +31,6 @@ void loop() {
 
 
  measure_voltage();
-  measure_voltage();
-
 
 while(1){}
 
@@ -67,7 +63,7 @@ void read_register_group(uint16_t command, uint8_t response[6]){      //register
   cmd1 = command >> 0;
 
   wakeup_sleep(1);
-  delay(2);             //small delay is needed after wake to bring up power supply (3 time constants of 5V capacitor)
+  delay(2);             //small delay is needed after wake to bring up power supply
   digitalWrite(CS, LOW);
 
   comm_arr[0] = cmd0;
@@ -200,7 +196,7 @@ void poll_ADC(uint16_t command){
 void measure_voltage(){
   uint8_t response[6];
   uint16_t cell_voltage_binary[18];
-  //poll_ADC(ADCV);
+  poll_ADC(ADCV);
   read_register_group(RDCVA, response);
   cell_voltage_binary[0] = ((uint8_t)response[1] << 8) | response[0];
   cell_voltage_binary[1] = ((uint8_t)response[3] << 8) | response[2];
