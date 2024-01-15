@@ -12,6 +12,7 @@ float cell_voltage[18];     //most recent cell voltages
 
 void setup() {
   delay(3000);
+  Serial.begin(115200);
   pinMode(CS,OUTPUT);
   SPI.begin();
   SPI.beginTransaction(SPISettings(14000, MSBFIRST, SPI_MODE0));
@@ -23,25 +24,32 @@ void loop() {
   uint8_t data[6];
 
   data[0] = 0b00000000;     //register 0 in group.    1 : GPIO high
-  data[1] = 0b11111111;
-  data[2] = 0b11111111;
-  data[3] = 0b11110111;
-  data[4] = 0b11111111;
+  data[1] = 0b00000000;
+  data[2] = 0b00000000;
+  data[3] = 0b00000000;
+  data[4] = 0b00000000;
   data[5] = 0b00000000;
 
+   //write_register_group(WRCFGA, data);
 
- measure_voltage();
+  //balance();
 
-while(1){}
+
+
+while(1){ 
+  //measure_voltage();
+  read_register_group(RDCVA, response);
+  delay(1500);
+  }
 
   read_register_group(RDCVA, response);
   poll_ADC(ADCV);
   read_register_group(RDCVA, response);
 
   write_register_group(WRCFGA, data);
-  Serial.print("register A ");
+  //Serial.print("register A ");
   read_register_group(RDCFGA, response);
-  Serial.print("register B ");
+ // Serial.print("register B ");
   write_register_group(WRCFGB, data);
   read_register_group(RDCFGB, response);
 }
@@ -78,7 +86,7 @@ void read_register_group(uint16_t command, uint8_t response[6]){      //register
   return_data = SPI.transfer(pec0);
   return_data = SPI.transfer(pec1);
 
-  Serial.println("Response");
+  //Serial.println("Response");
   delay(2);
     for (int i = 0; i < 6; ++i) {
       //delay(.01);
@@ -93,11 +101,11 @@ void read_register_group(uint16_t command, uint8_t response[6]){      //register
 
       pec = pec15_calc(6, response);
 
-      Serial.println("response pec");
-      Serial.println(response_pec0, BIN);
-      Serial.println(response_pec1, BIN);
-      Serial.println("calculated pec");
-      Serial.println(pec, BIN);
+        Serial.println("response pec");
+        Serial.println(response_pec0, BIN);
+        Serial.println(response_pec1, BIN);
+        Serial.println("calculated pec");
+        Serial.println(pec, BIN);
 
     digitalWrite(CS, HIGH);
 
@@ -180,7 +188,7 @@ void poll_ADC(uint16_t command){
   return_data = SPI.transfer(pec0);
   return_data = SPI.transfer(pec1);
 
-  Serial.println("Response");
+  //Serial.println("Response");
 
   return_data = 0b00000000;
   int num_polls = 0;
@@ -188,8 +196,8 @@ void poll_ADC(uint16_t command){
       return_data = SPI.transfer(0b11111111); // Send dummy byte to receive data
       num_polls++;
     }
-  Serial.println("ADC Conversion Done!");
-  Serial.println(num_polls);
+ // Serial.println("ADC Conversion Done!");
+  //Serial.println(num_polls);
   digitalWrite(CS, HIGH);
 }
 
@@ -222,11 +230,44 @@ void measure_voltage(){
   cell_voltage_binary[16] = ((uint8_t)response[3] << 8) + response[2];
   cell_voltage_binary[17] = ((uint8_t)response[5] << 8) + response[4];
 
-  float temp;
-  for(int i = 0; i<18; i++){
-    temp = cell_voltage_binary[i];
-    cell_voltage[i] = 5*temp;
-    Serial.println(cell_voltage_binary[i]*0.0001);    //LSB represents 100 uV
+  for(int i = 0; i<18; i++){;
+    cell_voltage[i] = cell_voltage_binary[i]*0.0001;
+    Serial.println(cell_voltage[i]);    //LSB represents 100 uV
   }
+
+}
+
+void balance(){
+  uint8_t data[6];
+while(1){
+
+  delay(10*1000);
+  Serial.println(millis());
+  measure_voltage();
+  float  min_voltage = 10;
+  uint8_t discharge = 0;
+  for(int i=0; i<=5; i++){
+    if(min_voltage > cell_voltage[i]){
+      min_voltage = cell_voltage[i];
+    }
+    //Serial.println(min_voltage);
+  }
+  for(int i=0; i<=5; i++){
+    if(cell_voltage[i] > min_voltage*1.01 && cell_voltage[i] > 3.6){
+      discharge = discharge + pow(2,i);
+    }
+  }
+  Serial.println(discharge);
+  data[0] = 0b11111100;
+  data[1] = 0b00000000;
+  data[2] = 0b00000000;
+  data[3] = 0b00000000;
+  data[4] = discharge;
+  data[5] = 0b00010000;
+
+  Serial.println("");
+
+  write_register_group(WRCFGA, data);
+}
 
 }
