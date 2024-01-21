@@ -33,11 +33,12 @@ void loop() {
   data[5] = 0b00000000;
 
 
- //balance();
- 
-while(1){
- write_register_group(WRCFGA, data);
+ balance();
+//write_register_group(WRCFGA, data);
  read_register_group(RDCFGA , response);
+ measure_voltage();
+
+while(1){
 
 }
 
@@ -115,8 +116,8 @@ void read_register_group(uint16_t command, uint8_t response[6]){      //register
 }
 
 void write_register_group(uint16_t command, uint8_t data[6]){
-  //wakeup_sleep(1);
-  //delay(2);
+  wakeup_sleep(1);
+  delay(1);               //small delay is needed to bring up LTC6813 regulated voltage
   digitalWrite(CS, LOW);
 
   uint8_t return_data;
@@ -256,17 +257,17 @@ void balance(){
   //Comparison Voltage = (VUV + 1) • 16 • 100μV
   VUV = balance_threshold/(16*0.0001)-1;
 
-  data[0] = 0b11111100;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
+  data[0] = 0b00000000;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
   data[1] = (uint8_t) VUV;
   data[2] = (uint8_t) (VUV>>8);
-  data[3] = 0b11111111;
+  data[3] = 0b00000000;
   data[4] = 0b00000000;
   data[5] = 0b00000000;
 
-  // Serial.println("Data:");
-  // for(int i = 0; i<6; i++){
-  //   Serial.println(data[i], BIN);
-  // }
+  Serial.println("Data:");
+  for(int i = 0; i<6; i++){
+    Serial.println(data[i], BIN);
+  }
 
   write_register_group(WRCFGA, data);
 
