@@ -9,9 +9,11 @@
 
 int wire_cut = 0;
 float cell_voltage[18];     //most recent cell voltages
+bool overvoltage_flag[18];
+bool undervoltage_flag[18];
 
 float OV = 4.2;       //over-voltage limit (spelled with an "oh" not zero)
-float UV = 2.8;       //under-voltage limit
+float UV = 1.13;       //under-voltage limit
 
 void setup() {
   delay(3000);
@@ -33,13 +35,13 @@ void loop() {
   data[5] = 0b00000000;
 
 
- balance();
-//write_register_group(WRCFGA, data);
- read_register_group(RDCFGA , response);
- measure_voltage();
-
 while(1){
-
+  configure_sense();
+  //write_register_group(WRCFGA, data);
+  measure_voltage();
+  //read_register_group(RDSTATB , response);
+  sense_status();
+  delay(1000);
 }
 
 //measure_voltage();
@@ -91,9 +93,8 @@ void read_register_group(uint16_t command, uint8_t response[6]){      //register
   return_data = SPI.transfer(pec1);
 
   Serial.println("Response");
-  //delay(2);
+
     for (int i = 0; i < 6; ++i) {
-      //delay(.01);
       response[i] = SPI.transfer(0b11111111); // Send dummy byte to receive data
       Serial.println(response[i], BIN); 
     }
@@ -105,11 +106,11 @@ void read_register_group(uint16_t command, uint8_t response[6]){      //register
 
       pec = pec15_calc(6, response);
 
-      Serial.println("response pec");
-      Serial.println(response_pec0, BIN);
-      Serial.println(response_pec1, BIN);
-      Serial.println("calculated pec");
-      Serial.println(pec, BIN);
+      // Serial.println("response pec");
+      // Serial.println(response_pec0, BIN);
+      // Serial.println(response_pec1, BIN);
+      // Serial.println("calculated pec");
+      // Serial.println(pec, BIN);
 
     digitalWrite(CS, HIGH);
 
@@ -238,38 +239,68 @@ void measure_voltage(){
   cell_voltage_binary[17] = ((uint8_t)response[5] << 8) + response[4];
 
   float temp;
+  Serial.println("voltages");
   for(int i = 0; i<18; i++){
-    temp = cell_voltage_binary[i];
+    temp = cell_voltage_binary[i];      //This needs fixed
     cell_voltage[i] = 5*temp;
     Serial.println(cell_voltage_binary[i]*0.0001);    //LSB represents 100 uV
   }
 
 }
 
-void balance(){
-  int8_t response[6];
+void configure_sense(){     
+  uint8_t response[6];
   uint8_t data[6];
-  float balance_threshold = 3.6;
   uint16_t VUV;
+  uint16_t VOV;
+  float balance_threshold = 1.13;
+  VUV = UV/(16*0.0001)-1;     //Comparison Voltage = (VUV + 1) • 16 • 100μV  (pg. 68 in datasheet)
+  VOV = OV/(16*0.0001);       //Comparison Voltage = VOV • 16 • 100μV        (pg. 68 in datasheet)
 
-
-  balance_threshold = 1;        //starting threshold for balancing
-  //Comparison Voltage = (VUV + 1) • 16 • 100μV
-  VUV = balance_threshold/(16*0.0001)-1;
+  Serial.println(VUV, BIN);
 
   data[0] = 0b00000000;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
   data[1] = (uint8_t) VUV;
+  // data[2] = (uint8_t) (VOV & 0b11110000) | (VUV>>8 & 0b00001111);
   data[2] = (uint8_t) (VUV>>8);
+  //data[3] = (uint8_t) VOV>>4;
   data[3] = 0b00000000;
   data[4] = 0b00000000;
   data[5] = 0b00000000;
 
-  Serial.println("Data:");
-  for(int i = 0; i<6; i++){
-    Serial.println(data[i], BIN);
-  }
+  // Serial.println("Data:");
+  // for(int i = 0; i<6; i++){
+  //   Serial.println(data[i], BIN);
+  // }
 
   write_register_group(WRCFGA, data);
 
+}
+
+void sense_status(){
+  uint8_t response[6];
+  read_register_group(RDSTATB , response);
+
+  undervoltage_flag[0] = response[2]>>0 & 0b1;
+  undervoltage_flag[1] = response[2]>>2 & 0b1;
+  undervoltage_flag[2] = response[2]>>4 & 0b1;
+  undervoltage_flag[3] = response[2]>>6 & 0b1;
+  undervoltage_flag[4] = response[3]>>0 & 0b1;
+  undervoltage_flag[5] = response[3]>>2 & 0b1;
+  undervoltage_flag[6] = 0;
+  undervoltage_flag[7] = 0;
+  undervoltage_flag[8] = 0;
+  undervoltage_flag[9] = 0;
+  undervoltage_flag[10] = 0;
+  undervoltage_flag[11] = 0;
+  undervoltage_flag[12] = 0;
+  undervoltage_flag[13] = 0;
+  undervoltage_flag[14] = 0;
+  undervoltage_flag[15] = 0;
+  Serial.println("voltage flags");
+  for(int i = 0; i<=5; i++){
+    Serial.println(undervoltage_flag[i]);
+  }
+  Serial.println("done");
 
 }
