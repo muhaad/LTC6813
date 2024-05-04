@@ -14,8 +14,10 @@ void myCallback() {
 //LTC6813 minimum supply voltage is 16V
 
 #define CS 10   //chip select pin 
-#define num_boards 1
+#define num_boards 2
 #define num_cells 14       //cells per board
+#define max_temp 50
+#define min_temp 0
 
 int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
@@ -329,7 +331,7 @@ void reset_watchdog(){
 
     for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< 9; j++){
-      if((cell_temp[i][j] > 0 && cell_temp[i][j] < 60) || j == 5){
+      if((cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp) || j == 5){
         continue;
       }
       else{
