@@ -2,13 +2,14 @@
 #include <cmath>
 #include "LTC681x.h"
 #include "COMMANDS.h"
+#include "HEADER.h"
 #include "LUTS.h"
 #include "Watchdog_t4.h"
 
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
 void myCallback() {               
-  Serial.println("FEED THE DOG SOON, OR RESET!");
+  //Serial.println("FEED THE DOG SOON, OR RESET!");
 }
 
 //LTC6813 minimum supply voltage is 16V
@@ -22,7 +23,7 @@ void myCallback() {
 
 int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
-float cell_temp[num_boards][9];
+float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
 float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
@@ -55,8 +56,6 @@ void loop() {
 
   digitalWrite(20, LOW);
 
-  uint8_t response[6];
-  uint8_t data[6];
   while(1){
   wakeup_sleep(num_boards);
 
@@ -71,16 +70,12 @@ void loop() {
 
 }
 
-void read_register_group(uint16_t command, uint8_t response[num_boards][6]){      //register group is always 6 bytes 
 
-  uint8_t return_data;
+void send_command(uint16_t command){
   uint8_t comm_arr[2];
   uint16_t pec;
   uint8_t pec0;
   uint8_t pec1;
-  uint8_t response_pec0;
-  uint8_t response_pec1;
-
   uint8_t cmd0;
   uint8_t cmd1;
 
@@ -88,7 +83,8 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   cmd1 = command >> 0;
 
   wakeup_sleep(num_boards);
-  delay(2);             //small delay is needed after wake to bring up power supply
+
+  delay(2);                 //small delay is needed after wake to bring up power supply
   digitalWrite(CS, LOW);
 
   comm_arr[0] = cmd0;
@@ -98,10 +94,19 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   pec1 = pec >> 0;
   pec0 = pec >> 8;
 
-  return_data = SPI.transfer(cmd0);
-  return_data = SPI.transfer(cmd1);
-  return_data = SPI.transfer(pec0);
-  return_data = SPI.transfer(pec1);
+  SPI.transfer(cmd0);
+  SPI.transfer(cmd1);
+  SPI.transfer(pec0);
+  SPI.transfer(pec1);
+}
+
+void read_register_group(uint16_t command, uint8_t response[num_boards][6]){      //register group is always 6 bytes 
+
+  uint16_t pec;
+  uint8_t response_pec0;
+  uint8_t response_pec1;
+
+  send_command(command);
 
   //Serial.println("Response");
   for (int i = 0; i < num_boards; i++){
@@ -128,48 +133,20 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
 }
 
 void write_register_group(uint16_t command, uint8_t data[6]){
-  wakeup_sleep(num_boards);
-
-  delay(2);               //small delay is needed to bring up LTC6813 regulated voltage
-  digitalWrite(CS, LOW);
 
   uint8_t return_data;
-  uint8_t comm_arr[2];
-  uint16_t pec;
-  uint8_t pec0;
-  uint8_t pec1;
-  uint8_t cmd0;
-  uint8_t cmd1;
-
-
-  cmd0 = command >> 8;
-  cmd1 = command >> 0;
-
-  comm_arr[0] = cmd0;
-  comm_arr[1] = cmd1;
-  
-  pec = pec15_calc(2, comm_arr);
-
-  pec1 = pec >> 0;
-  pec0 = pec >> 8;
-
   uint8_t data_pec0;
   uint8_t data_pec1;
-  
   uint16_t data_pec = pec15_calc(6, data);
+
+  send_command(command);
+  
   data_pec1 = data_pec >> 0;
   data_pec0 = data_pec >> 8;
 
-    delay(2);
-
-    return_data = SPI.transfer(cmd0);
-    return_data = SPI.transfer(cmd1);
-    return_data = SPI.transfer(pec0);
-    return_data = SPI.transfer(pec1);
-
-    for(int i=0; i<6 ; i++){
-      SPI.transfer(data[i]);
-    }
+  for(int i=0; i<6 ; i++){
+    SPI.transfer(data[i]);
+  }
 
   return_data = SPI.transfer(data_pec0);
   return_data = SPI.transfer(data_pec1);
@@ -179,35 +156,10 @@ void write_register_group(uint16_t command, uint8_t data[6]){
 }
 
 void poll_ADC(uint16_t command){
-  uint8_t return_data;
-  uint8_t comm_arr[2];
-  uint16_t pec;
-  uint8_t pec0;
-  uint8_t pec1;
-  uint8_t cmd0;
-  uint8_t cmd1;
+  uint8_t return_data = 0;
 
-  cmd0 = command >> 8;
-  cmd1 = command >> 0;
+  send_command(command);
 
-    wakeup_sleep(num_boards);
-
-  delay(2);             //small delay is needed after wake to bring up power supply
-  digitalWrite(CS, LOW);
-
-  comm_arr[0] = cmd0;
-  comm_arr[1] = cmd1;
-
-  pec = pec15_calc(2, comm_arr);
-  pec1 = pec >> 0;
-  pec0 = pec >> 8;
-
-  return_data = SPI.transfer(cmd0);
-  return_data = SPI.transfer(cmd1);
-  return_data = SPI.transfer(pec0);
-  return_data = SPI.transfer(pec1);
-
-  return_data = 0b00000000;
   int num_polls = 0;
     while (return_data == 0) {
       return_data = SPI.transfer(0b11111111); // Send dummy byte to receive data
@@ -223,6 +175,8 @@ void measure_voltage(){
   uint16_t cell_comm[6] = {RDCVA, RDCVB, RDCVC, RDCVD, RDCVE, RDCVF};   //read cell voltage registers A through E commands
 
   poll_ADC(ADCV);   //initiate and wait for voltage measurement
+  //poll_ADC(ADCV);   //initiate and wait for voltage measurement
+  //poll_ADC(ADCV);   //initiate and wait for voltage measurement
 
   for(int i=0; i*3 < num_cells; i++){         //i: cell group
     Serial.print('i');
@@ -257,15 +211,16 @@ void measure_voltage(){
 float map_temp(float V){
   int i;
   int size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
-  float NTC_res;
-  float dist = std::abs(NTC_res - NTC_LUT[0]);
-  float V_ref = 3;
   float R_bias = 10200;
-  //Serial.println(V);
-  NTC_res = (V/V_ref*R_bias)/(1-V/V_ref);
-  //Serial.print("NTC_resistance");
-  //Serial.println(NTC_res);
+  float V_ref = 3.00;
 
+  if(V_ref == V){   //divide by zero case
+    return -40;
+  }
+
+  float NTC_res = (V/V_ref*R_bias)/(1-V/V_ref);
+
+  float dist = std::abs(NTC_res - NTC_LUT[0]);
 
   for(i = 1; i<size; i++){
     float new_dist = std::abs(NTC_res - NTC_LUT[i]);
@@ -281,17 +236,20 @@ float map_temp(float V){
   return(temperature);
 }
 
-void measure_temp(){
+void measure_temp(bool open_wire_check){
   uint8_t response[num_boards][6];
   uint16_t aux_comm[4] = {RDAUXA, RDAUXB, RDAUXC, RDAUXD};   //read aux registers A through D commands
-
-  poll_ADC(ADAX);   //initiate and wait for GPIO measurement
-
   int temp_num = 0;       //temperature reading index 0-8
   int command_num = 0;    //command index within aux_comm array
-  
+
+  if(open_wire_check == false){
+    poll_ADC(ADAX);   //initiate and wait for GPIO measurement
+  }
+  else{
+    poll_ADC(AXOW);
+  }
+
   while(temp_num < 9){
-    Serial.println(command_num);
     uint16_t curr_comm = aux_comm[command_num];                 //each command reads a sequential set of three GPIO from each board (RDAUXB is an exception with just 2 GPIO)
     read_register_group(curr_comm, response);
     for(int k = 0; k < 3 && temp_num < 9; k++){
@@ -301,11 +259,6 @@ void measure_temp(){
       for(int j = 0; j< num_boards; j++){                               //maximum of 3 GPIO per register group and 9 thermistors
               cell_temp[j][temp_num] = (float)(((uint8_t)response[j][k*2+1] << 8) | response[j][k*2]) * 0.0001;  //LSB represents 100 uV
               Serial.println(cell_temp[j][temp_num]);
-              if(temp_num == 8 && false){
-                Serial.println("");
-                Serial.println(k);
-                Serial.println(command_num);
-              }
       }   
       temp_num++;
     }
@@ -359,29 +312,7 @@ void reset_watchdog(){
 
 void sense_status(){
 
-  uint8_t response[num_boards][6];
-  uint16_t aux_comm[4] = {RDAUXA, RDAUXB, RDAUXC, RDAUXD};   //read aux registers A through D commands
-
-  poll_ADC(AXOW);   //initiate and wait for GPIO measurement
-
-  int temp_num = 0;       //temperature reading index 0-8
-  int command_num = 0;    //command index within aux_comm array
-  Serial.println("Open Thermistor Wires:");
-  while(temp_num < 9){
-    uint16_t curr_comm = aux_comm[command_num];                 //each command reads a sequential set of three GPIO from each board (RDAUXB is an exception with just 2 GPIO)
-    read_register_group(curr_comm, response);
-    for(int k = 0; k < 3 && temp_num < 9; k++){
-      if(command_num == 1 && k>1){                              //register group B only contains 2 GPIO measurements
-        continue;
-      }
-      for(int j = 0; j< num_boards; j++){                               //maximum of 3 GPIO per register group and 9 thermistors
-              GPIO_open_wire[j][temp_num] = (float)(((uint8_t)response[j][k*2+1] << 8) | response[j][k*2]) * 0.0001;  //LSB represents 100 uV
-              Serial.println(GPIO_open_wire[j][temp_num]);
-      }   
-      temp_num++;
-    }
-  command_num++;
-  }
-
 }
+
+
 
