@@ -1,0 +1,30 @@
+FIX temperature Sensor 6
+FIX Cyclic Redundancy Check to accomidate multiple Boards (throw warning when CRC fails)
+Use Binary Search to map NTC resistance value to temperature
+Add Current Sensing
+Add Balancing: turn off balancing when board exceeds X temperature
+Add CAN  (charging, status, SOC message, warnings)
+Add Open Wire checks (mask up to X disconnected temperature sensors per board)
+Add Nominal, warning, and faluire status to BMS indicator light
+Add sense board Initialization, status check (wire cut)
+Fix top and bottom cell voltages (probably a hardware issue, or digital filtering)
+multi-processing vs blocking and polling 
+UI?
+Telematics?
+wake from sleep timer
+fix watchdog feed condition (only feed when nominal status)
+Use platformIO?
+clear measurements after reading
+
+
+
+
+
+
+
+
+
+
+
+
+

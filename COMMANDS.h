@@ -41,10 +41,14 @@ extern int wire_cut;        //indicates position of wire break . "0" indicates n
 #define STCOMM   0b0000011100100011      //Start I 2C/SPI Communication 
 #define MUTE     0b0000000000101000      //Mute Discharge
 #define UNMUTE   0b0000000000101001      //Unmute Discharge 
-                
+
+//// configuration dependent commands ////
+
 #define ADCV     0b0000001001100000      //Start Start Cell Voltage ADC Conversion and Poll Status
 //#define ADCV     0b0000001011100000      //Start Start Cell Voltage ADC Conversion and Poll Status
 #define ADAX     0b0000010001100000      //Start Start Cell Voltage ADC Conversion and Poll Status
+
+#define AXOW     0b0000010001010000
 
 
 #endif
