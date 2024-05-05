@@ -1,5 +1,8 @@
 #include <SPI.h>
 #include <cmath>
+#include <stdint.h>
+#include <algorithm>
+#include <string>
 #include "LTC681x.h"
 #include "COMMANDS.h"
 #include "HEADER.h"
@@ -24,12 +27,11 @@ void myCallback() {
 int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
 float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
-float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
-
+bool temp_open_wire[num_boards][9];
 float OV = 4.2;       //over-voltage limit (spelled with an "oh" not zero)
-float UV = 3;       //under-voltage limit       abs
+float UV = 3;       //under-voltage limit
 
 void setup() {
   delay(1000);
@@ -43,18 +45,15 @@ void setup() {
   WDT_timings_t config;
   config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
   config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
-  config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
+  config.pin = 20;                               //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
   config.callback = myCallback;
   wdt.begin(config);
-  pinMode(20, OUTPUT);
+  pinMode(20, OUTPUT);        //shutdown enable pin
   digitalWrite(20, LOW);
-
 
 }
 
 void loop() {
-
-  digitalWrite(20, LOW);
 
   while(1){
   wakeup_sleep(num_boards);
@@ -64,8 +63,8 @@ void loop() {
   reset_watchdog();
   wdt.feed();  
   delay(1000);  
-  //sense_status();
-  //delay(99999999999);
+  sense_status();
+  //delay(99999);
   }
 
 }
@@ -214,7 +213,7 @@ float map_temp(float V){
   float R_bias = 10200;
   float V_ref = 3.00;
 
-  if(V_ref == V){   //divide by zero case
+  if(V >= V_ref){   //avoid divide by zero
     return -40;
   }
 
@@ -242,11 +241,13 @@ void measure_temp(bool open_wire_check){
   int temp_num = 0;       //temperature reading index 0-8
   int command_num = 0;    //command index within aux_comm array
 
-  if(open_wire_check == false){
-    poll_ADC(ADAX);   //initiate and wait for GPIO measurement
+  if(open_wire_check){
+    for(int i = 0; i < 10; i++){          //gives current sources enough time to create a large enough difference for the open wire algorithm to detect an open connection
+      poll_ADC(AXOW);   //initiate and wait for GPIO measurement w/ internal current sink/source
+    }
   }
   else{
-    poll_ADC(AXOW);
+    poll_ADC(ADAX);   //initiate and wait for GPIO measurement
   }
 
   while(temp_num < 9){
@@ -257,8 +258,14 @@ void measure_temp(bool open_wire_check){
         continue;
       }
       for(int j = 0; j< num_boards; j++){                               //maximum of 3 GPIO per register group and 9 thermistors
-              cell_temp[j][temp_num] = (float)(((uint8_t)response[j][k*2+1] << 8) | response[j][k*2]) * 0.0001;  //LSB represents 100 uV
-              Serial.println(cell_temp[j][temp_num]);
+        float GPIO_val = (float)(((uint8_t)response[j][k*2+1] << 8) | response[j][k*2]) * 0.0001;  //LSB represents 100 uV
+        if(open_wire_check == false){
+          Serial.println(GPIO_val);
+          cell_temp[j][temp_num] = map_temp(GPIO_val);       //map GPIO to temperature value
+        }
+        else{
+          cell_temp[j][temp_num] = GPIO_val;        //cell_temp contains raw voltage values during open wire checks
+        }
       }   
       temp_num++;
     }
@@ -267,17 +274,11 @@ void measure_temp(bool open_wire_check){
 
   Serial.println("Tempearatures:");
   for(int i=0; i<num_boards; i++){
+    Serial.print("board: "); Serial.println(i);
     for(int j=0; j<9; j++){
-        //Serial.println(cell_temp[i][j]);   
-        Serial.println(map_temp(cell_temp[i][j]));
-        cell_temp[i][j] = map_temp(cell_temp[i][j]);
+        Serial.println(cell_temp[i][j]);
     }
-    Serial.print("next board");
-    Serial.println('\n');
   }
-
-
-
 }
 
 void reset_watchdog(){
@@ -310,9 +311,29 @@ void reset_watchdog(){
   digitalWrite(20, HIGH);
 }
 
-void sense_status(){
+void sense_status(){        //open wire check algorithim is outlined in page 32 of datasheet
+  float temp_PU[num_boards][9];                 //temperature pull-up measurement
+  float temp_PD[num_boards][9];                 //temperature pull-down measurement
+  float temp_delta[num_boards][9];                 //temperature pull-down measurement
+
+  AXOW = AXOW | 0x40;         //Pull-Up Current (PUP = 1)
+  //Serial.println(AXOW, BIN);
+  measure_temp(true);
+  memcpy (temp_PU, cell_temp, num_boards*9*sizeof(float));
+  
+  AXOW = AXOW & (0xFFFF-0x40);  //Pull-Down Current (PUP = 0)
+  //Serial.println(AXOW, BIN);
+  measure_temp(true);
+  memcpy (temp_PD, cell_temp, num_boards*9*sizeof(float));
+
+  Serial.println("");
+  for(int i = 0 ; i<num_boards; i++){
+    for(int j= 0 ; j<9; j++){
+      temp_delta[i][j] = temp_PU[i][j] - temp_PD[i][j];
+      Serial.print(temp_delta[i][j]); Serial.print(" ");
+    }
+    Serial.print("\n");
+  }  
 
 }
-
-
 

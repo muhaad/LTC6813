@@ -7,6 +7,7 @@
 
 extern int wire_cut;        //indicates position of wire break . "0" indicates normal operation with no break in the isoSPI line
 
+////static commands////
 #define WRCFGA   0b0000000000000001      //Write Configuration Register Group A
 #define WRCFGB   0b0000000000100100      //Write Configuration Register Group B
 #define RDCFGA   0b0000000000000010      //Read Configuration Register Group A
@@ -48,7 +49,7 @@ extern int wire_cut;        //indicates position of wire break . "0" indicates n
 //#define ADCV     0b0000001011100000      //Start Start Cell Voltage ADC Conversion and Poll Status
 #define ADAX     0b0000010001100000      //Start Start Cell Voltage ADC Conversion and Poll Status
 
-#define AXOW     0b0000010001010000
-
+//// runtime dependent commands////
+uint16_t AXOW =  0b0000010001010000;
 
 #endif
