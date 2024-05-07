@@ -16,8 +16,6 @@ fix watchdog feed condition (only feed when nominal status)
 Use platformIO?
 clear measurements after reading
 
-watchdog should be started after initialization and status is checked
-
 
 
 
