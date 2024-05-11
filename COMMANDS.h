@@ -45,6 +45,7 @@ extern int wire_cut;        //indicates position of wire break . "0" indicates n
 //// configuration dependent commands ////
 
 #define ADCV     0b0000001001100000      //Start Start Cell Voltage ADC Conversion and Poll Status
+#define ADCV_1_7_13     0b0000001001100000      //Start Start Cell Voltage ADC Conversion and Poll Status for C1,7,13
 //#define ADCV     0b0000001011100000      //Start Start Cell Voltage ADC Conversion and Poll Status
 #define ADAX     0b0000010001100000      //Start Start Cell Voltage ADC Conversion and Poll Status
 

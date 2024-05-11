@@ -20,6 +20,7 @@ void myCallback() {
 #define max_temp 50
 #define min_temp 0
 #define wake_delay 2    //wake delay per board (milliseconds) to bring up power supply to voltage. Depends on Linear voltage regulator capacitance
+#define cell_RC 0.0001  //C pin filter RC time constant in milliseconds (R*C*1000)
 
 int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
@@ -64,7 +65,6 @@ void loop() {
   reset_watchdog();
   delay(1000);  
   //sense_status();
-  //delay(99999999999);
   }
 
 }
@@ -173,9 +173,10 @@ void measure_voltage(){
   uint8_t response[num_boards][6];
   uint16_t cell_comm[6] = {RDCVA, RDCVB, RDCVC, RDCVD, RDCVE, RDCVF};   //read cell voltage registers A through E commands
 
+  ////cell voltage measurement algorithm outlined in INTERNAL PROTECTION AND FILTERING section of LTC6813 datasheet////
+  poll_ADC(ADCV | 0b1);   //measure cells 1,7,13 to allow MUX voltage to settle
+  delay(cell_RC * 6);
   poll_ADC(ADCV);   //initiate and wait for voltage measurement
-  //poll_ADC(ADCV);   //initiate and wait for voltage measurement
-  //poll_ADC(ADCV);   //initiate and wait for voltage measurement
 
   for(int i=0; i*3 < num_cells; i++){         //i: cell group
     //Serial.print('i');
