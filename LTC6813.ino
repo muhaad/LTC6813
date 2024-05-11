@@ -42,9 +42,9 @@ void setup() {
   //Watchdog
   WDT_timings_t config;
   config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
-  config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
+  config.timeout = 15; /* in seconds, 0->128 */   //time until watchdog reset
   config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
-  config.callback = myCallback;
+  //config.callback = myCallback;
   wdt.begin(config);
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
@@ -62,7 +62,6 @@ void loop() {
   measure_voltage();
   measure_temp();
   reset_watchdog();
-  wdt.feed();  
   delay(1000);  
   //sense_status();
   //delay(99999999999);
@@ -165,8 +164,8 @@ void poll_ADC(uint16_t command){
       return_data = SPI.transfer(0b11111111); // Send dummy byte to receive data
       num_polls++;
     }
-  Serial.println("ADC Conversion Done!");
-  Serial.println(num_polls);
+  //Serial.println("ADC Conversion Done!");
+  //Serial.println(num_polls);
   digitalWrite(CS, HIGH);
 }
 
@@ -179,8 +178,8 @@ void measure_voltage(){
   //poll_ADC(ADCV);   //initiate and wait for voltage measurement
 
   for(int i=0; i*3 < num_cells; i++){         //i: cell group
-    Serial.print('i');
-    Serial.println(i);
+    //Serial.print('i');
+    //Serial.println(i);
     uint16_t curr_comm = cell_comm[i];                 //each command reads a sequential set of three cells from each board
     read_register_group(curr_comm, response);
 
@@ -258,7 +257,7 @@ void measure_temp(bool open_wire_check){
       }
       for(int j = 0; j< num_boards; j++){                               //maximum of 3 GPIO per register group and 9 thermistors
               cell_temp[j][temp_num] = (float)(((uint8_t)response[j][k*2+1] << 8) | response[j][k*2]) * 0.0001;  //LSB represents 100 uV
-              Serial.println(cell_temp[j][temp_num]);
+              //Serial.println(cell_temp[j][temp_num]);
       }   
       temp_num++;
     }
@@ -289,7 +288,7 @@ void reset_watchdog(){
       else{
           Serial.println("invalid voltage");
           Serial.println(cell_voltage[i][j]);
-          digitalWrite(20, LOW);
+          //digitalWrite(20, LOW);
           return;
       }
     }
@@ -302,12 +301,14 @@ void reset_watchdog(){
       }
       else{
           Serial.println("invalid temp");
-          digitalWrite(20, LOW);
+          //digitalWrite(20, LOW);
           return;
       }
     }
   }
   digitalWrite(20, HIGH);
+  wdt.feed();  
+  
 }
 
 void sense_status(){
