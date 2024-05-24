@@ -58,13 +58,18 @@ void read_register_group2(uint16_t command, uint8_t response[NUM_BOARDS][6]){   
         SPI.transfer(nullptr,recv_buff,sizeof(recv_buff));
         //copy data into response array
         memcpy(response[i], recv_buff, sizeof(recv_buff));
-        
+        /*
+        ** could also extract the pecs from the SPI.transfer call along
+        ** with the data if this syntax works
+        */
         response_pec0 = SPI.transfer(0xFF);
         response_pec1 = SPI.transfer(0xFF);
         pec = pec15_calc(6, recv_buff);
         // pec = pec15_calc(6, response[i]);
 
-        //see if returned and calculated pec are same
+        /*see if returned and calculated pec are same
+        **may have appened pec1 and pec0 in wrong order
+        */
         if(!check_pec(pec,(uint16_t)(response_pec1 << 8) | response_pec0)){
             snprintf(msg,sizeof(msg),"Board %d data corruption.\n",i);
             Serial.print(msg);
