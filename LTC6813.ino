@@ -6,6 +6,20 @@
 #include "LUTS.h"
 #include "Watchdog_t4.h"
 
+#include <FlexCAN_T4.h>
+
+
+#define CRX3 23
+#define CTX3 22
+#define STBY 21     //CAN Transceiver Standby
+
+uint16_t CHG_voltage = 588;
+uint16_t CHG_current = 9;
+
+bool CHG_EN = 0; //0: enable charging, 1: disable charging
+
+FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;
+
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
 void myCallback() {               
@@ -30,7 +44,7 @@ bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
 float OV = 4.2;       //over-voltage limit (spelled with an "oh" not zero)
-float UV = 3;       //under-voltage limit       abs
+float UV = 2.8;       //under-voltage limit       abs
 
 void setup() {
   delay(1000);
@@ -39,11 +53,19 @@ void setup() {
   SPI.begin();
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
 
+  //CAN
+  pinMode(CRX3, INPUT);
+  pinMode(CTX3, OUTPUT);
+  pinMode(STBY, OUTPUT);
+
+  can.begin();
+  can.setBaudRate(250000);
+  can.enableFIFO();
 
   //Watchdog
   WDT_timings_t config;
-  config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
-  config.timeout = 15; /* in seconds, 0->128 */   //time until watchdog reset
+  //config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
+  config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
   config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
   //config.callback = myCallback;
   wdt.begin(config);
@@ -58,13 +80,12 @@ void loop() {
   digitalWrite(20, LOW);
 
   while(1){
-  wakeup_sleep(num_boards);
-
   measure_voltage();
   measure_temp();
+  measure_current();
+  send_CAN();
   reset_watchdog();
   delay(1000);  
-  //sense_status();
   }
 
 }
@@ -102,6 +123,8 @@ void send_command(uint16_t command){
 void read_register_group(uint16_t command, uint8_t response[num_boards][6]){      //register group is always 6 bytes 
 
   uint16_t pec;
+  uint8_t pec0;
+  uint8_t pec1;
   uint8_t response_pec0;
   uint8_t response_pec1;
 
@@ -115,7 +138,15 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
     }
       response_pec0 = SPI.transfer(0xFF);
       response_pec1 = SPI.transfer(0xFF);
-      pec = pec15_calc(6, response[0]);
+      pec = pec15_calc(6, response[i]);
+      pec1 = pec >> 0;
+      pec0 = pec >> 8;
+      //Serial.println("Response");
+      //Serial.println(response_pec0);
+      //Serial.println(response_pec1);
+      //Serial.println("Calc");
+      //Serial.println(pec0);
+      //Serial.println(pec1); 
 //Serial.println('\n');
   }
 
@@ -198,11 +229,11 @@ void measure_voltage(){
   Serial.println("Voltages:");
   int g = 0;
   for(int i=0; i<num_boards; i++){
+    Serial.print("board: "); Serial.println(i+1);
     for(int j=0; j<num_cells; j++){
        Serial.println(cell_voltage[i][j]);   
        g++; 
     }
-    Serial.print("next board");
     Serial.println('\n');
   }
  
@@ -267,12 +298,12 @@ void measure_temp(bool open_wire_check){
 
   Serial.println("Tempearatures:");
   for(int i=0; i<num_boards; i++){
+    Serial.print("board: "); Serial.println(i+1);
     for(int j=0; j<9; j++){
         //Serial.println(cell_temp[i][j]);   
         Serial.println(map_temp(cell_temp[i][j]));
         cell_temp[i][j] = map_temp(cell_temp[i][j]);
     }
-    Serial.print("next board");
     Serial.println('\n');
   }
 
@@ -289,20 +320,20 @@ void reset_watchdog(){
       else{
           Serial.println("invalid voltage");
           Serial.println(cell_voltage[i][j]);
-          //digitalWrite(20, LOW);
+          digitalWrite(20, LOW);
           return;
       }
     }
   }
 
     for(int i = 0; i < num_boards; i++){
-    for(int j = 0; j< 9; j++){
-      if((cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp) || j == 8){
+    for(int j = 0; j< 8; j++){          //9th temp sensor wired incorrectly
+      if((cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp) || (i==7 && j == 7)){   //board 8 temp sensor 8 open
         continue;
       }
       else{
           Serial.println("invalid temp");
-          //digitalWrite(20, LOW);
+          digitalWrite(20, LOW);
           return;
       }
     }
@@ -316,5 +347,67 @@ void sense_status(){
 
 }
 
+void measure_current(){
+    float R1 = 10000;   //bottom resistor in voltage divider (ohms)
+    float R2 = 5100;    //top resistor in voltage divier (ohms)
+    int ADC_in;
+    float ADC_volt;
+    float Hall_volt;
+    float current;
+    ADC_in = analogRead(A11);       // 0-1023 integer
+    //Serial.println(ADC_in);
+    ADC_volt = float(ADC_in)/1023*3.3;
+    //Serial.println(ADC_volt);
+    Hall_volt = ADC_volt*(10000+5100)/10000;
+    //Serial.println(Hall_volt);
+    current = (Hall_volt-0.25)/(4.5)*(100)-50; 
+    Serial.println("Current");       
+    Serial.println(current);
+    Serial.println();
+}
+
+void send_CAN(){
+  digitalWrite(STBY, LOW);
+  digitalWrite(CTX3, HIGH);
+
+  CAN_message_t CHGR_EN;
+  CHGR_EN.id = 0x1806E6F4;  // Set the CAN message ID
+  CHGR_EN.len = 8;     // Set the data length
+
+  CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10 >> 8);
+  CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10);
+  CHGR_EN.buf[2] = (uint8_t)(CHG_current*10 >> 8);
+  CHGR_EN.buf[3] = (uint8_t)(CHG_current*10);
+  CHGR_EN.buf[4] = (uint8_t)(CHG_EN);
+  CHGR_EN.buf[5] = 0;
+  CHGR_EN.buf[6] = 0;
+  CHGR_EN.buf[7] = 0;
+
+  can.write(CHGR_EN);
+  Serial.println("CAN message sent");
+}
+
+void RX_CAN(){
+
+  digitalWrite(STBY, LOW);
+  digitalWrite(CTX3, HIGH);
+
+  CAN_message_t msg;
+  bool received = false;
+  while (received == false) {
+    can.read(msg);
+    Serial.print("ID: ");
+    Serial.print(msg.id, HEX);
+    Serial.println(" Data: ");
+    msg.len = 20;
+    for (int i = 0; i < msg.len; i++) {
+      Serial.print(msg.buf[i], BIN);
+      Serial.print(" ");
+    }
+    received = true;
+    Serial.print('\n');
+  }
+
+}
 
 
