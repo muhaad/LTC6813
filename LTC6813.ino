@@ -136,11 +136,17 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
       response[i][j] = SPI.transfer(0b11111111); // Send dummy byte to receive data
       //Serial.println(response[i][j], BIN); 
     }
-      response_pec0 = SPI.transfer(0xFF);
-      response_pec1 = SPI.transfer(0xFF);
-      pec = pec15_calc(6, response[i]);
-      pec1 = pec >> 0;
-      pec0 = pec >> 8;
+
+    response_pec0 = SPI.transfer(0xFF);
+    response_pec1 = SPI.transfer(0xFF);
+    pec = pec15_calc(6, response[i]);
+    pec1 = pec >> 0;
+    pec0 = pec >> 8;
+
+    if(response_pec0 != pec0 || response_pec1 != pec1){
+      read_register_group(command, response);
+    }
+
       //Serial.println("Response");
       //Serial.println(response_pec0);
       //Serial.println(response_pec1);
@@ -148,6 +154,7 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
       //Serial.println(pec0);
       //Serial.println(pec1); 
 //Serial.println('\n');
+
   }
 
       pec = pec15_calc(6, response[0]);     //this needs fixed to include multiple boards
@@ -306,9 +313,6 @@ void measure_temp(bool open_wire_check){
     }
     Serial.println('\n');
   }
-
-
-
 }
 
 void reset_watchdog(){
