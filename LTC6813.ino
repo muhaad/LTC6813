@@ -14,7 +14,7 @@
 #define STBY 21     //CAN Transceiver Standby
 
 uint16_t CHG_voltage = 588;
-uint16_t CHG_current = 9;
+uint16_t CHG_current = 4;
 
 bool CHG_EN = 0; //0: enable charging, 1: disable charging
 
@@ -85,6 +85,7 @@ void loop() {
   measure_current();
   send_CAN();
   reset_watchdog();
+  //RX_CAN();
   delay(1000);  
   }
 
@@ -371,12 +372,14 @@ void measure_current(){
 }
 
 void send_CAN(){
-  digitalWrite(STBY, LOW);
+    digitalWrite(STBY, LOW);
   digitalWrite(CTX3, HIGH);
-
+  delay(1);
+  digitalWrite(CTX3, LOW);
   CAN_message_t CHGR_EN;
-  CHGR_EN.id = 0x1806E6F4;  // Set the CAN message ID
-  CHGR_EN.len = 8;     // Set the data length
+  CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
+  CHGR_EN.flags.extended = 1;
+  CHGR_EN.len = 5;     // Set the data length
 
   CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10 >> 8);
   CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10);
@@ -387,8 +390,12 @@ void send_CAN(){
   CHGR_EN.buf[6] = 0;
   CHGR_EN.buf[7] = 0;
 
-  can.write(CHGR_EN);
-  Serial.println("CAN message sent");
+  if(can.write(CHGR_EN)){
+    Serial.println("CAN message sent");
+  }
+  else{
+    Serial.println("CAN message TX Failed");
+  }
 }
 
 void RX_CAN(){
@@ -403,7 +410,7 @@ void RX_CAN(){
     Serial.print("ID: ");
     Serial.print(msg.id, HEX);
     Serial.println(" Data: ");
-    msg.len = 20;
+    msg.len = 16;
     for (int i = 0; i < msg.len; i++) {
       Serial.print(msg.buf[i], BIN);
       Serial.print(" ");
