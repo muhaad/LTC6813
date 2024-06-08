@@ -42,6 +42,8 @@ Threads::Mutex currentMutex;
 
 void myCallback() {               
   //Serial.println("FEED THE DOG SOON, OR RESET!");
+  measure_voltage();
+  reset_watchdog();
 }
 
 //LTC6813 minimum supply voltage is 16V
@@ -68,6 +70,7 @@ float UV = 2.8;       //under-voltage limit       abs
 IntervalTimer curr_meas;
 IntervalTimer volt_meas;
 IntervalTimer write_SD;
+IntervalTimer meas_temp;
 
 void setup() {
   delay(1000);
@@ -91,20 +94,21 @@ void setup() {
 
   //Watchdog
   WDT_timings_t config;
-  //config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
+  // config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
   config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
   config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
-  //config.callback = myCallback;
-  wdt.begin(config);
+  // config.callback = myCallback;
+  // wdt.begin(config);
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
 
   curr_meas.begin(measure_current, 1000);
-  // curr_meas.priority(125);
+  // curr_meas.priority(128);
   volt_meas.begin(measure_voltage,1000000);
-  // volt_meas.priority(128);
+  // volt_meas.priority(32);
   write_SD.begin(writeDataToSD,1300000);
-  // write_SD.priority(0);
+  // write_SD.priority(64);
+  // meas_temp.begin(measure_temp,1000000);
 }
 
 void loop() {
@@ -156,7 +160,7 @@ void writeDataToSD() {
     dataFile.print("\nTime:\n");
 
     //time stamp
-    dataFile.print(millis()-start_time);
+    // dataFile.print(millis()-start_time);
     dataFile.println();
 
     dataFile.close();
@@ -365,7 +369,7 @@ void measure_voltage(){
     }
     Serial.println('\n');
   }
- 
+  
 }
 
 float map_temp(float V){
@@ -397,6 +401,7 @@ float map_temp(float V){
 }
 
 void measure_temp(bool open_wire_check){
+  volt_meas.end();
   uint8_t response[num_boards][6];
   uint16_t aux_comm[4] = {RDAUXA, RDAUXB, RDAUXC, RDAUXD};   //read aux registers A through D commands
   int temp_num = 0;       //temperature reading index 0-8
@@ -435,6 +440,7 @@ void measure_temp(bool open_wire_check){
     }
     Serial.println('\n');
   }
+  volt_meas.begin(measure_voltage,1000000);
 }
 
 void reset_watchdog(){
@@ -554,4 +560,5 @@ void RX_CAN(){
   }
 
 }
+
 
