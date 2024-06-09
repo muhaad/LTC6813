@@ -43,13 +43,18 @@ void myCallback() {
 int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
 float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
+float die_temps[num_boards];
 float current;
 float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
-float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero)
-float UV = 2.8;       //under-voltage limit       abs
+float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
+float UV = 2.8;       //under-voltage limit       (V)
+
+//balancing parameters
+float balance_threshold = 3.4;    //will not balance cells below this threshold (V)
+float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
 
 float current_offset = 0;
 
@@ -57,16 +62,13 @@ void setup() {
   //open shutdown circuit
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
-  delay(1000);
+  delay(20);
   Serial.println("startup");
 
   //SPI
   pinMode(CS,OUTPUT);
   SPI.begin();
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
-
-  configure_sense();
-  balance();
 
   //CAN
   pinMode(CRX3, INPUT);
@@ -87,29 +89,45 @@ void setup() {
   //current compensation
   measure_current();
   current_offset = current;
-  sense_status();
+
   configure_sense();
-  while(1){
-    balance();
-  }
-  wdt.begin(config);
+
+  //wdt.begin(config);
   
 }
 
 void loop() {
 
   digitalWrite(20, LOW);
-
-  while(1){
   measure_voltage();
   measure_temp();
-  measure_current();
-  send_CAN();
-  reset_watchdog();
-  delay(1000);  
+  sense_status();
+  while(1){
+    print_min_max();
+    delay(1000);  
   }
 
 }
+
+void print_min_max(){   //This function prints the min and max parameters
+  float min_cell_voltage = cell_voltage[0][0];
+  float max_cell_voltage = cell_voltage[0][0];
+  float min_cell_temp = cell_temp[0][0];
+  float max_cell_temp = cell_temp[0][0];
+  float min_die_temp = die_temps[0];
+  float max_die_temp = die_temps[0];
+  min_max<num_boards,num_cells>(cell_voltage, &min_cell_voltage, &max_cell_voltage);
+  min_max<num_boards,9>(cell_temp, &min_cell_temp, &max_cell_temp);
+  min_max<1, num_boards>(&die_temps, &min_die_temp, &max_die_temp);       //This is how you pass a 1D array to the min_max function
+  Serial.print("Max cell voltage: "); Serial.println(max_cell_voltage);
+  Serial.print("Min cell_voltage: "); Serial.println(min_cell_voltage);
+  Serial.print("Max cell_temp: "); Serial.println(max_cell_temp);
+  Serial.print("Min cell_temp: "); Serial.println(min_cell_temp);
+  Serial.print("Max die temp: "); Serial.println(max_die_temp);
+  Serial.print("Min die temp: "); Serial.println(min_die_temp);
+}
+
+
 
 void send_command(uint16_t command){
   uint8_t comm_arr[2];
@@ -150,7 +168,6 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
 
   send_command(command);
 
-  //Serial.println("Response");
   for (int i = 0; i < num_boards; i++){
     for (int j = 0; j < 6; j++) {
       response[i][j] = SPI.transfer(0b11111111); // Send dummy byte to receive data
@@ -173,7 +190,7 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
       //Serial.println("Calc");
       //Serial.println(pec0);
       //Serial.println(pec1); 
-//Serial.println('\n');
+  //Serial.println('\n');
 
   }
 
@@ -466,8 +483,23 @@ void configure_sense(){
   write_register_group(WRCFGA, data_arr);
 }
 
+
+void balance(){
+  bool discharge[num_boards][18] = {0};  //'1': needs dischaged, '0': does not need discharged
+  float min = balance_threshold;
+  float max = cell_voltage[0][0];
+  
+  ////mark cells to be discharged////
+  min_max<num_boards,num_cells>(cell_voltage, &min, &max);
+  for(int i = 0; i<num_boards; i++){
+    for(int j =0; j<num_cells; j++){
+        discharge[i][j] = cell_voltage[i][j] > balance_threshold;
+    }
+  }
+  discharge_cells(discharge);
+}
+
 void sense_status(){
-  float die_temps[num_boards];
   uint8_t response[num_boards][6];
   poll_ADC(ADSTAT);
   read_register_group(RDSTATA, response);
@@ -505,9 +537,8 @@ void sense_status(){
 
 // }
 
-void balance(){
-  int time_on = 0;   //time each led is on in milliseconds
-  int up = 0;
+void flash_leds(){                        //Flashes each discharge resistor sequentially
+  int time_on = 0;                        //Time each led is on in milliseconds
   bool discharge[num_boards][18] = {0};  //'1': needs dischaged, '0': does not need discharged
   for(int i = num_boards; i>=0; i--){
     if(i % 4 < 2){
@@ -532,13 +563,6 @@ void balance(){
 }
 
 void discharge_cells(bool discharge[num_boards][18]){      //this function takes a 2D boolean array which is NOT dependent on num_cells.
-  // for(int i = 0; i<num_boards;i++){
-  //   for(int j = 0; j<18;j++){
-  //     Serial.print(discharge[i][j]);
-  //   }
-  //   Serial.println();
-  // }
-  // Serial.println();
   uint8_t data[6];
   uint8_t data_arr[num_boards][6];
   uint16_t VUV;
@@ -555,13 +579,7 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
     data[5] = (uint8_t) discharge[i][11]<<3 | discharge[i][10]<<2 | discharge[i][9]<<1 | discharge[i][8]<<0;
     std::copy(data, data + 6, data_arr[i]);
   }
-  // for(int i = 0; i<num_boards;i++){
-  //   for(int j = 0; j<6;j++){
-  //     Serial.println(data_arr[i][j], BIN);
-  //   }
-  //   Serial.println();
-  // }
-  // Serial.println();
+
   write_register_group(WRCFGA, data_arr);
   ////configuration register group B/////
     for(int i; i< num_boards; i++){
@@ -575,5 +593,4 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
     std::copy(data, data + 6, data_arr[i]);
   }
   write_register_group(WRCFGB, data_arr);
-
 }
