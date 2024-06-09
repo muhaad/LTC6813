@@ -130,17 +130,8 @@ void setup() {
   measure_current();
   current_offset = current;
 
+  //Bring up references on sense boards
   configure_sense();
-
-  //wdt.begin(config);
-  
-  // config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
-  config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
-  config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
-  // config.callback = myCallback;
-  wdt.begin(config);
-  pinMode(20, OUTPUT);
-  digitalWrite(20, LOW);
 
   curr_meas.begin(measure_current, 1000);
   // curr_meas.priority(128);
