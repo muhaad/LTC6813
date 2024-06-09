@@ -653,40 +653,56 @@ void reset_watchdog(){
   wdt.feed();  
 }
 
-void measure_current(){
-    digitalWrite(FREQ_PIN,HIGH);
-
-    float R1 = 10000;   //bottom resistor in voltage divider (ohms)
-    float R2 = 5100;    //top resistor in voltage divier (ohms)
-    int ADC_in;
+float map_current(int adc_in){
     float ADC_volt;
     float Hall_volt;
-    int num_bits = 12;   //ADC resolution
-    analogReadResolution(num_bits);
-    ADC_in = analogRead(A11);       // 0-1023 integer
-    Serial.println(ADC_in);
-    ADC_volt = float(ADC_in)/(pow(2,num_bits)-1)*3.3;
-    Serial.println(ADC_volt);
-    Hall_volt = ADC_volt*(R1+R2)/R1;
-    Serial.println(Hall_volt);
-    current = ((Hall_volt-0.25)/(4.5)*(100)-50) - current_offset; 
-    Serial.println("Current");       
-    Serial.println(current);
-    Serial.println();
-
     float current;
-
-    ADC_in = analogRead(A11);       // 0-1023 integer
     //Serial.println(ADC_in);
     ADC_volt = float(ADC_in)/1023*3.3;
     //Serial.println(ADC_volt);
     Hall_volt = ADC_volt*(10000+5100)/10000;
     //Serial.println(Hall_volt);
     current = (Hall_volt-0.25)/(4.5)*(100)-50; 
+
+    return current
+
+}
+void measure_current(){
+    //default to low current mode
+    static bool low_curr_mode = true;
+    float current;
+
+    digitalWrite(FREQ_PIN,HIGH);
+
+    float R1 = 10000;   //bottom resistor in voltage divider (ohms)
+    float R2 = 5100;    //top resistor in voltage divier (ohms)
+    int ADC_in;
+
+    //low current mode
+    if (low_curr_mode) {
+      ADC_in = analogRead(A11);       // 0-1023 integer
+      current = map_current(ADC_in);
+      //switch to high current mode if measurement is too high
+      if (current > 49) {
+        low_curr_mode = false;
+        //retake measurement in high current mode
+        ADC_in = analogRead(A10);
+        current = map_current(ADC_in);
+      }
+    //high current mode
+    }else {
+      ADC_in = analogRead(A10);
+      current = map_current(ADC_in);
+      //switch to low current mode if measurement is low
+      if (current < 49) {
+        low_curr_mode = true;
+        //retake measurement in low current mode
+        ADC_in = analogRead(A11);
+        current = map_current(ADC_in);
+      }
+    }
+
     gCurrent = current;
-    // Serial.println("Current");       
-    // Serial.println(current);
-    // Serial.println();
 
     digitalWrite(FREQ_PIN,LOW);
     //update current 
