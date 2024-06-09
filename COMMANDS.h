@@ -51,5 +51,7 @@ extern int wire_cut;        //indicates position of wire break . "0" indicates n
 
 #define AXOW     0b0000010001010000
 
+#define ADSTAT   0b000010001101010
+
 
 #endif

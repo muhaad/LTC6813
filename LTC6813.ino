@@ -1,13 +1,13 @@
-#include <SPI.h>
-#include <cmath>
 #include "LTC681x.h"
+
 #include "COMMANDS.h"
 #include "HEADER.h"
 #include "LUTS.h"
+
 #include "Watchdog_t4.h"
-
 #include <FlexCAN_T4.h>
-
+#include <SPI.h>
+#include <algorithm>
 
 #define CRX3 23
 #define CTX3 22
@@ -20,10 +20,14 @@ bool CHG_EN = 0; //0: enable charging, 1: disable charging
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;
 
+IntervalTimer ADC;
+
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
 void myCallback() {               
   //Serial.println("FEED THE DOG SOON, OR RESET!");
+  measure_voltage();
+  reset_watchdog();
 }
 
 //LTC6813 minimum supply voltage is 16V
@@ -39,40 +43,57 @@ void myCallback() {
 int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
 float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
+float current;
 float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
-float OV = 4.2;       //over-voltage limit (spelled with an "oh" not zero)
+float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero)
 float UV = 2.8;       //under-voltage limit       abs
 
+float current_offset = 0;
+
 void setup() {
+  //open shutdown circuit
+  pinMode(20, OUTPUT);
+  digitalWrite(20, LOW);
   delay(1000);
   Serial.println("startup");
+
+  //SPI
   pinMode(CS,OUTPUT);
   SPI.begin();
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+
+  configure_sense();
+  balance();
 
   //CAN
   pinMode(CRX3, INPUT);
   pinMode(CTX3, OUTPUT);
   pinMode(STBY, OUTPUT);
-
   can.begin();
   can.setBaudRate(250000);
   can.enableFIFO();
 
   //Watchdog
   WDT_timings_t config;
-  //config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
+  config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
   config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
   config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
   //config.callback = myCallback;
+  //wdt.begin(config);
+
+  //current compensation
+  measure_current();
+  current_offset = current;
+  sense_status();
+  configure_sense();
+  while(1){
+    balance();
+  }
   wdt.begin(config);
-  pinMode(20, OUTPUT);
-  digitalWrite(20, LOW);
-
-
+  
 }
 
 void loop() {
@@ -85,12 +106,10 @@ void loop() {
   measure_current();
   send_CAN();
   reset_watchdog();
-  //RX_CAN();
   delay(1000);  
   }
 
 }
-
 
 void send_command(uint16_t command){
   uint8_t comm_arr[2];
@@ -170,27 +189,27 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
 
 }
 
-void write_register_group(uint16_t command, uint8_t data[6]){
+void write_register_group(uint16_t command, uint8_t data[num_boards][6]){
 
   uint8_t return_data;
   uint8_t data_pec0;
   uint8_t data_pec1;
-  uint16_t data_pec = pec15_calc(6, data);
+  uint16_t data_pec;
 
   send_command(command);
-  
+
+  for(int i = 0 ; i<num_boards; i++){
+  data_pec = pec15_calc(6, data[i]);
   data_pec1 = data_pec >> 0;
   data_pec0 = data_pec >> 8;
 
-  for(int i=0; i<6 ; i++){
-    SPI.transfer(data[i]);
+  for(int j=0; j<6 ; j++){
+    SPI.transfer(data[i][j]);
   }
-
-  return_data = SPI.transfer(data_pec0);
-  return_data = SPI.transfer(data_pec1);
-
+    SPI.transfer(data_pec0);
+    SPI.transfer(data_pec1);
+  }
   digitalWrite(CS, HIGH);
-
 }
 
 void poll_ADC(uint16_t command){
@@ -345,11 +364,6 @@ void reset_watchdog(){
   }
   digitalWrite(20, HIGH);
   wdt.feed();  
-  
-}
-
-void sense_status(){
-
 }
 
 void measure_current(){
@@ -358,14 +372,15 @@ void measure_current(){
     int ADC_in;
     float ADC_volt;
     float Hall_volt;
-    float current;
+    int num_bits = 12;   //ADC resolution
+    analogReadResolution(num_bits);
     ADC_in = analogRead(A11);       // 0-1023 integer
-    //Serial.println(ADC_in);
-    ADC_volt = float(ADC_in)/1023*3.3;
-    //Serial.println(ADC_volt);
-    Hall_volt = ADC_volt*(10000+5100)/10000;
-    //Serial.println(Hall_volt);
-    current = (Hall_volt-0.25)/(4.5)*(100)-50; 
+    Serial.println(ADC_in);
+    ADC_volt = float(ADC_in)/(pow(2,num_bits)-1)*3.3;
+    Serial.println(ADC_volt);
+    Hall_volt = ADC_volt*(R1+R2)/R1;
+    Serial.println(Hall_volt);
+    current = ((Hall_volt-0.25)/(4.5)*(100)-50) - current_offset; 
     Serial.println("Current");       
     Serial.println(current);
     Serial.println();
@@ -418,7 +433,147 @@ void RX_CAN(){
     received = true;
     Serial.print('\n');
   }
-
 }
 
+void configure_sense(){     
+  uint8_t data[6];        
+  uint8_t data_arr[num_boards][6];  //contains identicle copies of data for each board
+  uint16_t VUV;
+  uint16_t VOV;
+  VUV = UV/(16*0.0001)-1;     //Comparison Voltage = (VUV + 1) • 16 • 100μV  (pg. 68 in datasheet)
+  VOV = OV/(16*0.0001);       //Comparison Voltage = VOV • 16 • 100μV        (pg. 68 in datasheet)
 
+  Serial.println(VUV, BIN);
+  Serial.println(VOV, BIN);
+
+  data[0] = 0b11111100;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
+  data[1] = (uint8_t) VUV;
+  data[2] = (uint8_t) (VOV & 0b11110000) | (VUV>>8 & 0b00001111);
+  data[3] = (uint8_t) VOV>>4;
+  data[4] = 0b00000000;
+  data[5] = 0b00000000;
+
+  // data[0] = 0b11111110;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
+  // data[1] = (uint8_t) VUV;
+  // data[2] = (uint8_t) (VOV & 0b11110000) | (VUV>>8 & 0b00001111);
+  // data[3] = (uint8_t) VOV>>4;
+  // data[4] = 0b11111111;
+  // data[5] = 0b11111111;
+
+  for(int i = 0; i< num_boards; i++){
+    std::copy(data, data + 6, data_arr[i]);
+  }
+  write_register_group(WRCFGA, data_arr);
+}
+
+void sense_status(){
+  float die_temps[num_boards];
+  uint8_t response[num_boards][6];
+  poll_ADC(ADSTAT);
+  read_register_group(RDSTATA, response);
+  for(int i = 0; i<num_boards;i++){
+    die_temps[i]= (response[i][2] | response[i][3]<<8) * (0.0001/.0076) - 276;
+    Serial.println(die_temps[i]);
+  }
+}
+
+// void sense_status(){
+//   uint8_t response[num_boards][6];
+//   read_register_group(RDSTATB , response);
+
+//   undervoltage_flag[0] = response[2]>>0 & 0b1;
+//   undervoltage_flag[1] = response[2]>>2 & 0b1;
+//   undervoltage_flag[2] = response[2]>>4 & 0b1;
+//   undervoltage_flag[3] = response[2]>>6 & 0b1;
+//   undervoltage_flag[4] = response[3]>>0 & 0b1;
+//   undervoltage_flag[5] = response[3]>>2 & 0b1;
+//   undervoltage_flag[6] = 0;
+//   undervoltage_flag[7] = 0;
+//   undervoltage_flag[8] = 0;
+//   undervoltage_flag[9] = 0;
+//   undervoltage_flag[10] = 0;
+//   undervoltage_flag[11] = 0;
+//   undervoltage_flag[12] = 0;
+//   undervoltage_flag[13] = 0;
+//   undervoltage_flag[14] = 0;
+//   undervoltage_flag[15] = 0;
+//   Serial.println("voltage flags");
+//   for(int i = 0; i<=5; i++){
+//     Serial.println(undervoltage_flag[i]);
+//   }
+//   Serial.println("done");
+
+// }
+
+void balance(){
+  int time_on = 0;   //time each led is on in milliseconds
+  int up = 0;
+  bool discharge[num_boards][18] = {0};  //'1': needs dischaged, '0': does not need discharged
+  for(int i = num_boards; i>=0; i--){
+    if(i % 4 < 2){
+      for(int j = 0; j<num_cells;j++){
+        discharge[i][j] = true;
+        discharge_cells(discharge);
+        delay(time_on);
+        discharge[i][j] = false;
+        discharge_cells(discharge);
+      }
+    }
+    else{
+      for(int j = num_cells; j>=0;j--){
+        discharge[i][j] = true;
+        discharge_cells(discharge);
+        delay(time_on);
+        discharge[i][j] = false;
+        discharge_cells(discharge);
+      }
+    }
+  }
+}
+
+void discharge_cells(bool discharge[num_boards][18]){      //this function takes a 2D boolean array which is NOT dependent on num_cells.
+  // for(int i = 0; i<num_boards;i++){
+  //   for(int j = 0; j<18;j++){
+  //     Serial.print(discharge[i][j]);
+  //   }
+  //   Serial.println();
+  // }
+  // Serial.println();
+  uint8_t data[6];
+  uint8_t data_arr[num_boards][6];
+  uint16_t VUV;
+  uint16_t VOV;
+  VUV = UV/(16*0.0001)-1;     //Comparison Voltage = (VUV + 1) • 16 • 100μV  (pg. 68 in datasheet)
+  VOV = OV/(16*0.0001);       //Comparison Voltage = VOV • 16 • 100μV        (pg. 68 in datasheet)
+  ////configuration register group A////
+  for(int i; i< num_boards; i++){
+    data[0] = 0b11111100;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
+    data[1] = (uint8_t) VUV;
+    data[2] = (uint8_t) (VOV & 0b11110000) | (VUV>>8 & 0b00001111);
+    data[3] = (uint8_t) VOV>>4;
+    data[4] = (uint8_t) discharge[i][7]<<7 | discharge[i][6]<<6 | discharge[i][5]<<5 | discharge[i][4]<<4 | discharge[i][3]<<3 | discharge[i][2]<<2 | discharge[i][1]<<1 | discharge[i][0]<<0;
+    data[5] = (uint8_t) discharge[i][11]<<3 | discharge[i][10]<<2 | discharge[i][9]<<1 | discharge[i][8]<<0;
+    std::copy(data, data + 6, data_arr[i]);
+  }
+  // for(int i = 0; i<num_boards;i++){
+  //   for(int j = 0; j<6;j++){
+  //     Serial.println(data_arr[i][j], BIN);
+  //   }
+  //   Serial.println();
+  // }
+  // Serial.println();
+  write_register_group(WRCFGA, data_arr);
+  ////configuration register group B/////
+    for(int i; i< num_boards; i++){
+    data[0] = (uint8_t) discharge[i][15]<<7 | discharge[i][14]<<6 | discharge[i][13]<<5 |discharge[i][12]<<4;
+    data[1] = (uint8_t) discharge[i][17] | discharge[i][16];
+    data[2] = (uint8_t) 0b00000000;
+    data[3] = (uint8_t) 0b00000000;
+    data[4] = (uint8_t) 0b00000000;
+    data[5] = (uint8_t) 0b00000000;
+
+    std::copy(data, data + 6, data_arr[i]);
+  }
+  write_register_group(WRCFGB, data_arr);
+
+}
