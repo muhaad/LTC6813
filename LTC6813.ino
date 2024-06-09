@@ -166,6 +166,9 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   uint8_t response_pec0;
   uint8_t response_pec1;
 
+  //do not interuppt during SPI communication
+  // noInterrupts();
+
   send_command(command);
 
   for (int i = 0; i < num_boards; i++){
@@ -482,6 +485,7 @@ void configure_sense(){
   }
   write_register_group(WRCFGA, data_arr);
 }
+<<<<<<< HEAD
 
 
 void balance(){
