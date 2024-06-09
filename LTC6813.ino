@@ -24,6 +24,8 @@ uint16_t CHG_voltage = 588;
 uint16_t CHG_current = 4;
 
 #define FREQ_PIN 33
+//pre-charge threshold
+#define THRESHOLD 0.5
 
 const int chipSelect = BUILTIN_SDCARD;
 
@@ -132,14 +134,6 @@ void setup() {
 
   //Bring up references on sense boards
   configure_sense();
-
-  curr_meas.begin(measure_current, 1000);
-  // curr_meas.priority(128);
-  volt_meas.begin(measure_voltage,1000000);
-  // volt_meas.priority(32);
-  write_SD.begin(writeDataToSD,1300000);
-  // write_SD.priority(64);
-  // meas_temp.begin(measure_temp,1000000);
 }
 
 void loop() {
@@ -148,7 +142,16 @@ void loop() {
   measure_voltage();
   measure_temp();
   sense_status();
-
+  //wait for ready to drive to start measurement threads
+  float curr = measure_current();
+  while(curr < THRESHOLD){
+    curr = measure_current();
+    delay(1000);
+  }
+  //begin measurments
+  curr_meas.begin(measure_current, 1000);
+  volt_meas.begin(measure_voltage,1000000);
+  write_SD.begin(writeDataToSD,1300000);
   while(1){
     // measure_voltage();
     measure_temp();
