@@ -86,6 +86,9 @@ IntervalTimer volt_meas;
 IntervalTimer write_SD;
 IntervalTimer meas_temp;
 
+//global variable to hold current current.
+float gCurrent = 0;
+
 void setup() {
   //open shutdown circuit
   pinMode(20, OUTPUT);
@@ -142,16 +145,21 @@ void loop() {
   measure_voltage();
   measure_temp();
   sense_status();
+  
   //wait for ready to drive to start measurement threads
-  float curr = measure_current();
+  Serial.println("Pre-charging...");
+  float curr = gCurrent;
   while(curr < THRESHOLD){
-    curr = measure_current();
+    measure_current();
+    curr = gCurrent;
     delay(1000);
   }
   //begin measurments
   curr_meas.begin(measure_current, 1000);
   volt_meas.begin(measure_voltage,1000000);
   write_SD.begin(writeDataToSD,1300000);
+  Serial.println("Ready to drive.");
+  
   while(1){
     // measure_voltage();
     measure_temp();
@@ -675,6 +683,7 @@ void measure_current(){
     Hall_volt = ADC_volt*(10000+5100)/10000;
     //Serial.println(Hall_volt);
     current = (Hall_volt-0.25)/(4.5)*(100)-50; 
+    gCurrent = current;
     // Serial.println("Current");       
     // Serial.println(current);
     // Serial.println();
