@@ -23,7 +23,6 @@
 uint16_t CHG_voltage = 588;
 uint16_t CHG_current = 4;
 
-#define FREQ_PIN 33
 //pre-charge threshold
 #define THRESHOLD 0.5
 
@@ -37,7 +36,6 @@ FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;
 IntervalTimer ADC;
 
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
-
 
 // // Shared variables
 float currentSum = 0.0;
@@ -72,10 +70,10 @@ bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
 float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
-float UV = 2.8;       //under-voltage limit       (V)
+float UV = 3.6;       //under-voltage limit       (V)
 
 //balancing parameters
-float balance_threshold = 3.4;    //will not balance cells below this threshold (V)
+float balance_threshold = 3.71;    //will not balance cells below this threshold (V)
 float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
 
 float current_offset = 0;
@@ -90,16 +88,16 @@ IntervalTimer meas_temp;
 float gCurrent = 0;
 
 void setup() {
+  //measure_voltage();
   //open shutdown circuit
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
-  delay(20);
   //dump data from SD card to external program--Arduino IDE serial monitor will need to be off
   //*******
   Serial.begin(9600);
-  delay(5000);
-  dumpDataToSerial();
-  delay(1000);
+  //delay(5000);
+  //dumpDataToSerial();
+  //delay(1000);
   Serial.println("startup");
 
   //SPI
@@ -108,13 +106,13 @@ void setup() {
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
 
   //SD card calls;
-  initializeSDCard();
+  //initializeSDCard();
   /*will set soc to previous known value. Must manually delete soc.txt file
   *from sd card at first start up (when battery is fully charged)- or add switch/push button that we could use to reset soc
   */
-  manage_soc();
+  //manage_soc();
   start_time = millis();
-  
+  Serial.println(start_time);
   //CAN
   pinMode(CRX3, INPUT);
   pinMode(CTX3, OUTPUT);
@@ -132,14 +130,26 @@ void setup() {
   //wdt.begin(config);
 
   //current compensation
-  measure_current();
-  current_offset = current;
+  //measure_current();
+  //current_offset = current;
 
   //Bring up references on sense boards
-  configure_sense();
+  //configure_sense();
 }
 
 void loop() {
+
+  while(1){
+    measure_voltage();
+    measure_temp();
+    if(true){
+    balance(true);
+    }
+    delay(2000);
+    //balance(false);
+    //delay(2000);
+  }
+
 
   digitalWrite(20, LOW);
   measure_voltage();
@@ -190,7 +200,6 @@ void print_min_max(){   //This function prints the min and max parameters
   Serial.print("Max die temp: "); Serial.println(max_die_temp);
   Serial.print("Min die temp: "); Serial.println(min_die_temp);
 }
-
 
 
 // // dump CSV data from last run to the serial port and delete the file
@@ -381,8 +390,6 @@ float avgCurrent() {
   return average;
 }
 
-
-
 void send_command(uint16_t command){
   uint8_t comm_arr[2];
   uint16_t pec;
@@ -478,7 +485,7 @@ void write_register_group(uint16_t command, uint8_t data[num_boards][6]){
 
   send_command(command);
 
-  for(int i = 0 ; i<num_boards; i++){
+  for(int i = num_boards-1; i>=0; i--){
   data_pec = pec15_calc(6, data[i]);
   data_pec1 = data_pec >> 0;
   data_pec0 = data_pec >> 8;
@@ -622,7 +629,7 @@ void measure_temp(bool open_wire_check){
 
 }
 
-void reset_watchdog(){
+bool reset_watchdog(){
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< num_cells; j++){
       if(cell_voltage[i][j] < OV && cell_voltage[i][j] > UV){
@@ -632,7 +639,7 @@ void reset_watchdog(){
           Serial.println("invalid voltage");
           Serial.println(cell_voltage[i][j]);
           digitalWrite(20, LOW);
-          return;
+          return false;
       }
     }
   }
@@ -645,15 +652,16 @@ void reset_watchdog(){
       else{
           Serial.println("invalid temp");
           digitalWrite(20, LOW);
-          return;
+          return false;
       }
     }
   }
   digitalWrite(20, HIGH);
   wdt.feed();  
+  return true;  
 }
 
-float map_current(int adc_in){
+float map_current(int ADC_in){
     float ADC_volt;
     float Hall_volt;
     float current;
@@ -664,7 +672,7 @@ float map_current(int adc_in){
     //Serial.println(Hall_volt);
     current = (Hall_volt-0.25)/(4.5)*(100)-50; 
 
-    return current
+    return current;
 
 }
 void measure_current(){
@@ -672,21 +680,19 @@ void measure_current(){
     static bool low_curr_mode = true;
     float current;
 
-    digitalWrite(FREQ_PIN,HIGH);
-
     float R1 = 10000;   //bottom resistor in voltage divider (ohms)
     float R2 = 5100;    //top resistor in voltage divier (ohms)
     int ADC_in;
 
     //low current mode
     if (low_curr_mode) {
-      ADC_in = analogRead(A11);       // 0-1023 integer
+      ADC_in = analogRead(A10);       // 0-1023 integer
       current = map_current(ADC_in);
-      //switch to high current mode if measurement is too high
+
       if (current > 49) {
         low_curr_mode = false;
         //retake measurement in high current mode
-        ADC_in = analogRead(A10);
+        ADC_in = analogRead(A11);
         current = map_current(ADC_in);
       }
     //high current mode
@@ -704,7 +710,6 @@ void measure_current(){
 
     gCurrent = current;
 
-    digitalWrite(FREQ_PIN,LOW);
     //update current 
     currentMutex.lock();
     currentSum += current;
@@ -719,8 +724,8 @@ void send_CAN(){
   digitalWrite(CTX3, LOW);
   CAN_message_t CHGR_EN;
   CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
-  CHGR_EN.flags.extended = 1;
-  CHGR_EN.len = 5;     // Set the data length
+  CHGR_EN.flags.extended = 1; 
+  CHGR_EN.len = 8;     // Set the data length
 
   CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10 >> 8);
   CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10);
@@ -791,19 +796,32 @@ void configure_sense(){
   write_register_group(WRCFGA, data_arr);
 }
 
-void balance(){
+void balance(bool keep_going){
   bool discharge[num_boards][18] = {0};  //'1': needs dischaged, '0': does not need discharged
-  float min = balance_threshold;
+  float min = cell_voltage[0][0];
   float max = cell_voltage[0][0];
-  
+
+  sense_status();
   ////mark cells to be discharged////
   min_max<num_boards,num_cells>(cell_voltage, &min, &max);
-  for(int i = 0; i<num_boards; i++){
-    for(int j =0; j<num_cells; j++){
-        discharge[i][j] = cell_voltage[i][j] > balance_threshold;
+  Serial.print("min cell voltage: "); Serial.println(min);
+  Serial.print("max cell voltage: "); Serial.println(max);
+  Serial.println("Cells to be discharged");
+  if(keep_going){
+    for(int i = 0; i<num_boards; i++){
+      for(int j =0; j<num_cells; j++){
+          discharge[i][j] = cell_voltage[i][j] > min && cell_voltage[i][j] > balance_threshold && die_temps[i] < 60.0f;
+          if(discharge[i][j]){
+          Serial.print("Board: "); Serial.print(i+1); Serial.print("  Cell: "); Serial.print(j+1); Serial.print(" Volt: "); Serial.println(cell_voltage[i][j]);
+          Serial.print("die temp: "); Serial.println(die_temps[i]);
+          }
+      }
     }
   }
   discharge_cells(discharge);
+  if(balance_threshold < min){
+    balance_threshold = min;
+  }
 }
 
 void sense_status(){
@@ -814,6 +832,7 @@ void sense_status(){
     die_temps[i]= (response[i][2] | response[i][3]<<8) * (0.0001/.0076) - 276;
     Serial.println(die_temps[i]);
   }
+  Serial.println();
 }
 
 // void sense_status(){
@@ -890,7 +909,7 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
   write_register_group(WRCFGA, data_arr);
   ////configuration register group B/////
     for(int i; i< num_boards; i++){
-    data[0] = (uint8_t) discharge[i][15]<<7 | discharge[i][14]<<6 | discharge[i][13]<<5 |discharge[i][12]<<4;
+    data[0] = (uint8_t) discharge[i][15]<<7 | discharge[i][14]<<6 | discharge[i][13]<<5 |discharge[i][12]<<4 | 0b1111;
     data[1] = (uint8_t) discharge[i][17] | discharge[i][16];
     data[2] = (uint8_t) 0b00000000;
     data[3] = (uint8_t) 0b00000000;
