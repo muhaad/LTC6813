@@ -45,11 +45,9 @@ float averagedCurrent = 0.0;
 Threads::Mutex currentMutex;
 
 //state of charge
-float soc = 0.00000000;
+float soc = 100.00000000;
 //total capacity( coulumbs): total capacity (Ah) * 60s/1hr
 float _qt = 12.6 * 60;
-
-// Threads::Mutex ADC;
 
 void myCallback() {               
   //Serial.println("FEED THE DOG SOON, OR RESET!");
@@ -124,14 +122,6 @@ void setup() {
   wdt.begin(config);
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
-
-  // curr_meas.begin(measure_current, 1000);
-  // // curr_meas.priority(128);
-  // volt_meas.begin(measure_voltage,1000000);
-  // // volt_meas.priority(32);
-  // write_SD.begin(writeDataToSD,1300000);
-  // write_SD.priority(64);
-  // meas_temp.begin(measure_temp,1000000);
 }
 
 
@@ -220,10 +210,10 @@ void manage_soc(){
     Serial.println("Failed to read SD card for soc.");
     return;
   }
+  //get last value of soc if soc.txt exists
   if(SD.exists("soc.txt")){
     File socFile = SD.open("soc.txt", FILE_READ);
     if (socFile) {
-      //get last value of soc
       String lastLine;
       while (socFile.available()) {
         lastLine = socFile.readStringUntil('\n');
@@ -237,6 +227,7 @@ void manage_soc(){
     }else {
       Serial.println("Error opening soc.txt for reading");
     }
+  //create soc.txt of it does not already exist
   }else {
     File socFile = SD.open("soc.txt", FILE_WRITE);
     Serial.println("Initializing state of charge to 100%");
@@ -725,4 +716,3 @@ void RX_CAN(){
   }
 
 }
-
