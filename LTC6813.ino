@@ -38,7 +38,7 @@ IntervalTimer ADC;
 
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
-
+bool SD_readable = true;
 // // Shared variables
 float currentSum = 0.0;
 int currentCount1 = 0;
@@ -166,6 +166,8 @@ void loop() {
   while(1){
     // measure_voltage();
     measure_temp();
+    update_soc();
+
     // measure_current();
     //send_CAN();
     reset_watchdog();
@@ -241,10 +243,10 @@ void manage_soc(){
     Serial.println("Failed to read SD card for soc.");
     return;
   }
+  //get last value of soc if soc.txt exists
   if(SD.exists("soc.txt")){
     File socFile = SD.open("soc.txt", FILE_READ);
     if (socFile) {
-      //get last value of soc
       String lastLine;
       while (socFile.available()) {
         lastLine = socFile.readStringUntil('\n');
@@ -258,6 +260,7 @@ void manage_soc(){
     }else {
       Serial.println("Error opening soc.txt for reading");
     }
+  //create soc.txt of it does not already exist
   }else {
     File socFile = SD.open("soc.txt", FILE_WRITE);
     Serial.println("Initializing state of charge to 100%");
@@ -268,24 +271,42 @@ void manage_soc(){
   }
 }
 
-void update_soc(float curr_sample, String time){
+void update_soc(){
+  float curr_sample = avgCurrent();
   soc -= curr_sample / _qt;
-  if (!SD.begin(chipSelect)) {
-    Serial.println("Failed to open SD card to update soc.");
-    return;
-  }
-  File socFile = SD.open("soc.txt", FILE_WRITE);
-  if (socFile) {
-    //add current charge and time to end of file 
-    socFile.print("Time: ");
-    socFile.print(time);
-    socFile.print(", Charge: ");
-    socFile.println(soc);
-    socFile.close();
-    Serial.print("State of charge: ");
-    Serial.println(soc);
-  }else {
-    Serial.println("Error opening soc.txt for writing");
+  //only attempt to write to SD if it is functioning
+  if(SD_readable){
+    if (!SD.begin(chipSelect)) {
+      Serial.println("Failed to open SD card to update soc.");
+      return;
+    }
+    File socFile = SD.open("soc.txt", FILE_WRITE);
+    if (socFile) {
+      //format ms into HH:MM:SS
+      float curr_time_ms = millis()-start_time;
+      unsigned long seconds = curr_time_ms / 1000;
+      unsigned long minutes = seconds / 60;
+      unsigned long hours = minutes / 60;
+      seconds = seconds % 60;
+      minutes = minutes % 60;
+      //this will keep the time within 24 hours
+      hours = hours % 24; 
+
+      char time_string[9]; //HH:MM:SS is 8 characters
+      sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
+
+      //time stamp
+      socFile.print("\nTime:\n");
+      socFile.print(time_string);
+      //state of charge
+      socFile.print(", Charge: ");
+      socFile.println(soc);
+      socFile.close();
+      Serial.print("State of charge: ");
+      Serial.println(soc);
+    }else {
+      Serial.println("Error opening soc.txt for writing");
+    }
   }
 }
 
@@ -303,7 +324,6 @@ void writeDataToSD() {
       }
     }
     dataFile.print("\nTemperature:\n");
-
     // //write temperature data
     for (int i = 0; i < num_boards; i++) {
       for (int j = 0; j < 9; j++) {
@@ -313,35 +333,8 @@ void writeDataToSD() {
         }
       }
     }
-    //Current Measurement
-    dataFile.print("\nCurrent: ");
-    float current = avgCurrent();
-    dataFile.print(current);
-
-    float curr_time_ms = millis()-start_time;
-    
-    //format ms into HH:MM:SS
-    unsigned long seconds = curr_time_ms / 1000;
-    unsigned long minutes = seconds / 60;
-    unsigned long hours = minutes / 60;
-    seconds = seconds % 60;
-    minutes = minutes % 60;
-    hours = hours % 24; // This will keep the time within 24 hours
-    char time_string[9]; // HH:MM:SS is 8 characters + null terminator
-    sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
-
-    dataFile.print("\nTime:\n");
-
-    //time stamp
-    dataFile.print(time_string);
-    dataFile.println();
-
     dataFile.close();
-    Serial.print("Time: ");
-    Serial.println(time_string);
-    //write to soc.txt
-    update_soc(current, time_string);
-    Serial.println("Data written to SD card");
+    Serial.println("Voltage and Temperature Data Written to SD card");
   } else {
     Serial.println("Error opening data.csv for writing");
   }
@@ -350,25 +343,18 @@ void writeDataToSD() {
 void initializeSDCard() {
   if (!SD.begin(chipSelect)) {
     Serial.println("SD card initialization failed!");
+    SD_readable = false;
     return;
   }
-  SD.remove("data.csv");
+  // open and close file to test if SD card is functioning correclty
+  //if not, do not attmept to write/read from SD card during the program
   File dataFile = SD.open("data.csv", FILE_WRITE);
-  
   if (dataFile) {
-    // Write the header row
-    for (int i = 1; i <= num_cells*num_boards; i++) {
-      dataFile.print("Cell ");
-      dataFile.print(i);
-      if (i < num_cells*num_boards) {
-        dataFile.print(", ");
-      }
-    }
-    dataFile.println();
     dataFile.close();
     Serial.println("SD Card Init Successful.");
   } else {
-    Serial.println("Error opening data.csv for writing");
+    Serial.println("Error Initializing SD card.");
+    SD_readable = false;
   }
 }
 
@@ -911,12 +897,12 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
 void myCallback() {     //called 1 second before watchdog reset
   //disable all interrupts//
   volt_meas.end();      
-  temp.meas.end();
+  curr_meas.end();
   write_SD.end();
   
 
   measure_voltage();
-  measure_temperature();
+  measure_temp();
   reset_watchdog();
 
   ////renable interrupts////
