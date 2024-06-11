@@ -71,11 +71,11 @@ float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
-float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
+float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
 float UV = 2.8;       //under-voltage limit       (V)
 
 //balancing parameters
-float balance_threshold = 3.4;    //will not balance cells below this threshold (V)
+float balance_threshold = 3.6;    //will not balance cells below this threshold (V)
 float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
 
 float current_offset = 0;
@@ -84,7 +84,6 @@ float current_offset = 0;
 IntervalTimer curr_meas;
 IntervalTimer volt_meas;
 IntervalTimer write_SD;
-IntervalTimer meas_temp;
 
 //global variable to hold current current.
 float gCurrent = 0;
@@ -220,7 +219,7 @@ void dumpDataToSerial() {
     dataFile.close();
 
     // Delete the file after sending its contents
-    SD.remove("data.csv");
+    //SD.remove("data.csv");
   } else {
     Serial.println("Error opening data.csv for reading");
   }
@@ -606,7 +605,9 @@ void measure_temp(bool open_wire_check){
 }
 
 bool reset_watchdog(){
-  int num_temp_masked[num_boards] = {0};
+  int num_temp_masked[num_boards] = {0};    //number of open wire (temp = 150) thermistors per board to be masked
+  int mask_threshold = 3;                       //number of allowable open temperature sensor faults to be masked
+
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< num_cells; j++){
       if(cell_voltage[i][j] < OV && cell_voltage[i][j] > UV){
@@ -622,18 +623,21 @@ bool reset_watchdog(){
   }
 
   for(int i = 0; i < num_boards; i++){
-    for(int j = 0; j< 8; j++){          //9th temp sensor wired incorrectly
+    for(int j = 0; j< 9; j++){          //9th temp sensor wired incorrectly
       if(cell_temp[i][j] == 150 || cell_temp[i][j] == -40){   //mask open wire faults
         num_temp_masked[i] += 1;
-        if(num_temp_masked[i] >= 2){
-          continue;
+        if(num_temp_masked[i] >= 3){
+          digitalWrite(20, LOW);
+          Serial.print("Board "); Serial.print(i+1); Serial.print("Lost "); Serial.print(mask_threshold); Serial.println(" Sensors");
+          return false;
         }
+        continue;
       }
       if(cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp){   //board 8 temp sensor 8 open
         continue;
       }
       else{
-          Serial.println("invalid temp");
+          Serial.print("invalid temp Board:  "); Serial.print(i+1); Serial.print("Num: "); Serial.println(j+1);
           digitalWrite(20, LOW);
           return false;
       }
