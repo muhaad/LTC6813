@@ -134,7 +134,6 @@ void setup() {
   //current compensation
   measure_current();
   current_offset = current;
-
   //Bring up references on sense boards
   configure_sense();
 }
@@ -655,48 +654,46 @@ float map_current(int ADC_in){
     Hall_volt = ADC_volt*(10000+5100)/10000;
     //Serial.println(Hall_volt);
     current = (Hall_volt-0.25)/(4.5)*(100)-50; 
-
     return current;
-
 }
 void measure_current(){
     //default to low current mode
     static bool low_curr_mode = true;
+    int ADC_in;
+    float ADC_volt;
+    float Hall_volt;
     float current;
-
-    digitalWrite(FREQ_PIN,HIGH);
-
     float R1 = 10000;   //bottom resistor in voltage divider (ohms)
     float R2 = 5100;    //top resistor in voltage divier (ohms)
-    int ADC_in;
-
     //low current mode
-    if (low_curr_mode) {
-      ADC_in = analogRead(A11);       // 0-1023 integer
-      current = map_current(ADC_in);
-      //switch to high current mode if measurement is too high
-      if (current > 49) {
-        low_curr_mode = false;
-        //retake measurement in high current mode
-        ADC_in = analogRead(A10);
-        current = map_current(ADC_in);
-      }
-    //high current mode
-    }else {
+    if(low_curr_mode){
       ADC_in = analogRead(A10);
-      current = map_current(ADC_in);
-      //switch to low current mode if measurement is low
-      if (current < 49) {
-        low_curr_mode = true;
-        //retake measurement in low current mode
+      if(ADC_in >= 1000){
+        low_curr_mode = false;
         ADC_in = analogRead(A11);
-        current = map_current(ADC_in);
       }
     }
+    else{
+      ADC_in = analogRead(A11);
+      if(ADC_in <= 600){
+        low_curr_mode = true;
+        ADC_in = analogRead(10);
+      }
+    }
+        //Serial.println(ADC_in);
+      ADC_volt = float(ADC_in)/1023*3.3;
+      //Serial.println(ADC_volt);
+      Hall_volt = ADC_volt*(R1+R2)/R1;
+      //Serial.println(Hall_volt);
+      if(low_curr_mode){
+        current = (Hall_volt-0.25)/(4.5)*(100)-50; 
+      }
+      else{
+        current = (Hall_volt-0.25)/(4.5)*(400)-200; 
+      }
+   
 
     gCurrent = current;
-
-    digitalWrite(FREQ_PIN,LOW);
     //update current 
     currentMutex.lock();
     currentSum += current;
@@ -899,7 +896,6 @@ void myCallback() {     //called 1 second before watchdog reset
   volt_meas.end();      
   curr_meas.end();
   write_SD.end();
-  
 
   measure_voltage();
   measure_temp();
