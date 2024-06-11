@@ -48,7 +48,7 @@ Threads::Mutex currentMutex;
 //state of charge
 float soc = 0.00000000;
 //total capacity( coulumbs): total capacity (Ah) * 60s/1hr
-float _qt = 12.6 * 60;
+float _qt = 4.2 * 3 * 60 * 60;    //  total charge = (4.2 Amp-Hours per 21700 Battery) * 3 parallel * 60 minutes/hour * 60 seconds/minute 
 
 // Threads::Mutex ADC;
 
@@ -75,6 +75,7 @@ float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
 float UV = 2.8;       //under-voltage limit       (V)
 
 //balancing parameters
+bool charge_mode = false;
 float balance_threshold = 3.6;    //will not balance cells below this threshold (V)
 float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
 
@@ -107,6 +108,7 @@ void setup() {
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
 
   //SD card calls;
+  SD.begin(chipSelect);
   initializeSDCard();
   /*will set soc to previous known value. Must manually delete soc.txt file
   *from sd card at first start up (when battery is fully charged)- or add switch/push button that we could use to reset soc
@@ -147,13 +149,17 @@ void loop() {
   //wait for ready to drive to start measurement threads
   Serial.println("Pre-charging...");
   float curr = gCurrent;
+
+
   while(curr < THRESHOLD){
     measure_voltage();
     measure_temp();
     reset_watchdog();
     measure_current();
+    if (Serial.available() > 0) {
+      
+    }
     curr = gCurrent;
-    delay(100);
   }
   //begin measurments
   curr_meas.begin(measure_current, 1000);
@@ -162,10 +168,10 @@ void loop() {
   Serial.println("Ready to drive.");
   
   while(1){
-    // measure_voltage();
+    Serial.println("Charged");
+    //measure_voltage();
     measure_temp();
     update_soc();
-
     // measure_current();
     //send_CAN();
     reset_watchdog();
@@ -309,8 +315,8 @@ void update_soc(){
 }
 
 void writeDataToSD() {
-  File dataFile = SD.open("data.csv", FILE_WRITE);
-  if (dataFile) {
+  if (SD.exists("data.csv")) {
+    File dataFile = SD.open("data.csv", FILE_WRITE);
     dataFile.print("Voltage:\n");
     //write voltage data
     for (int i = 0; i < num_boards; i++) {
@@ -331,8 +337,9 @@ void writeDataToSD() {
         }
       }
     }
+    //dataFile.print("\nCurrent:\n");
     dataFile.close();
-    Serial.println("Voltage and Temperature Data Written to SD card");
+    Serial.println("Data Written to SD card");
   } else {
     Serial.println("Error opening data.csv for writing");
   }
@@ -695,8 +702,6 @@ void measure_current(){
       else{
         current = (Hall_volt-0.25)/(4.5)*(400)-200; 
       }
-   
-
     gCurrent = current;
     //update current 
     currentMutex.lock();
@@ -784,19 +789,33 @@ void configure_sense(){
   write_register_group(WRCFGA, data_arr);
 }
 
-void balance(){
+
+void balance(bool keep_going){
   bool discharge[num_boards][18] = {0};  //'1': needs dischaged, '0': does not need discharged
-  float min = balance_threshold;
+  float min = cell_voltage[0][0];
   float max = cell_voltage[0][0];
-  
+
+  sense_status();
   ////mark cells to be discharged////
   min_max<num_boards,num_cells>(cell_voltage, &min, &max);
-  for(int i = 0; i<num_boards; i++){
-    for(int j =0; j<num_cells; j++){
-        discharge[i][j] = cell_voltage[i][j] > balance_threshold;
+  Serial.print("min cell voltage: "); Serial.println(min);
+  Serial.print("max cell voltage: "); Serial.println(max);
+  Serial.println("Cells to be discharged");
+  if(keep_going){
+    for(int i = 0; i<num_boards; i++){
+      for(int j =0; j<num_cells; j++){
+          discharge[i][j] = cell_voltage[i][j] > min && cell_voltage[i][j] > balance_threshold && die_temps[i] < 60.0f;
+          if(discharge[i][j]){
+          Serial.print("Board: "); Serial.print(i+1); Serial.print("  Cell: "); Serial.print(j+1); Serial.print(" Volt: "); Serial.println(cell_voltage[i][j]);
+          Serial.print("die temp: "); Serial.println(die_temps[i]);
+          }
+      }
     }
   }
   discharge_cells(discharge);
+  if(balance_threshold < min){
+    balance_threshold = min;
+  }
 }
 
 void sense_status(){
