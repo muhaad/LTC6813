@@ -333,7 +333,7 @@ void reset_watchdog(){
 
     for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< 8; j++){          //9th temp sensor wired incorrectly
-      if((cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp) || (i==7 && j == 7)){   //board 8 temp sensor 8 open
+      if((cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp) || (i==7 && j == 7) || i==0 && j == 7){   //board 8 temp sensor 8 open
         continue;
       }
       else{
