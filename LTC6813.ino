@@ -142,12 +142,12 @@ void loop() {
   while(1){
     measure_voltage();
     measure_temp();
-    if(true){
+    if(reset_watchdog()){
     balance(true);
     }
     delay(2000);
-    //balance(false);
-    //delay(2000);
+    balance(false);
+    delay(2000);
   }
 
 
