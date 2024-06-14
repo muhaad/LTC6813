@@ -1,0 +1,48 @@
+void write_to_SD(float current) {
+    File dataFile = SD.open("data.txt", FILE_WRITE);
+    if(dataFile){
+      dataFile.print("Voltage:\n");
+      //write voltage data
+      for (int i = 0; i < num_boards; i++) {
+        for (int j = 0; j < num_cells; j++) {
+          dataFile.print(cell_voltage[i][j], 4);
+          if (i < num_boards - 1 || j < num_cells - 1) {
+            dataFile.print(", ");
+          }
+        }
+      }
+      dataFile.print("\nTemperature:\n");
+      // //write temperature data
+      for (int i = 0; i < num_boards; i++) {
+        for (int j = 0; j < 9; j++) {
+          dataFile.print(cell_temp[i][j], 2);
+          if (i < num_boards - 1 || j < num_cells - 1) {
+            dataFile.print(", ");
+          }
+        }
+      }
+      dataFile.print("\nCurrent:\n");
+      dataFile.println(current);
+      dataFile.close();
+      Serial.println("Data written.");
+  } else {
+    Serial.println("Error opening data.txt for writing");
+  }
+}
+
+void take_measurments(){
+  float last_curr = millis();
+  float current_sum = 0;
+  int i = 0;
+  while(i < 10){
+    float curr_time = millis();
+    if(last_curr - curr_time >= 100){
+      current_sum += measure_current();
+      last_curr = curr_time;
+      i+=1;
+    }
+    delay(100);
+  }
+  measure_voltage();
+  write_to_SD(current_sum/10);
+}
