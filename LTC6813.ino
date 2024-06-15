@@ -69,11 +69,11 @@ float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
-float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
-float UV = 3.6;       //under-voltage limit       (V)
+float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
+float UV = 2.8;       //under-voltage limit       (V)
 
 //balancing parameters
-float balance_threshold = 3.71;    //will not balance cells below this threshold (V)
+float balance_threshold = 3.85;    //will not balance cells below this threshold (V)
 float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
 
 float current_offset = 0;
@@ -127,7 +127,7 @@ void setup() {
   config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
   config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
   //config.callback = myCallback;
-  //wdt.begin(config);
+  wdt.begin(config);
 
   //current compensation
   //measure_current();
@@ -140,15 +140,17 @@ void setup() {
 void loop() {
 
   while(1){
+    send_CAN(false);
     measure_voltage();
     measure_temp();
+    measure_current();
     if(reset_watchdog()){
-    balance(true);
+      //balance(false);
     }
-    delay(2000);
-    balance(false);
-    delay(2000);
-  }
+    delay(1000);
+      //balance(false);
+    send_CAN(true);
+    delay(2000);  }
 
 
   digitalWrite(20, LOW);
@@ -165,16 +167,16 @@ void loop() {
     delay(1000);
   }
   //begin measurments
-  curr_meas.begin(measure_current, 1000);
-  volt_meas.begin(measure_voltage,1000000);
-  write_SD.begin(writeDataToSD,1300000);
+  //curr_meas.begin(measure_current, 1000);
+  //volt_meas.begin(measure_voltage,1000000);
+  //write_SD.begin(writeDataToSD,1300000);
   Serial.println("Ready to drive.");
   
   while(1){
-    // measure_voltage();
+    measure_voltage();
     measure_temp();
-    // measure_current();
-    send_CAN();
+    measure_current();
+    //send_CAN();
     reset_watchdog();
     //RX_CAN();
     // writeDataToSD();
@@ -183,7 +185,7 @@ void loop() {
 
 }
 
-void print_min_max(){   //This function prints the min and max parameters
+void print_min_max(float* max_voltage){   //This function prints the min and max parameters
   float min_cell_voltage = cell_voltage[0][0];
   float max_cell_voltage = cell_voltage[0][0];
   float min_cell_temp = cell_temp[0][0];
@@ -585,7 +587,7 @@ float map_temp(float V){
 }
 
 void measure_temp(bool open_wire_check){
-  volt_meas.end();
+  //volt_meas.end();
   uint8_t response[num_boards][6];
   uint16_t aux_comm[4] = {RDAUXA, RDAUXB, RDAUXC, RDAUXD};   //read aux registers A through D commands
   int temp_num = 0;       //temperature reading index 0-8
@@ -625,11 +627,14 @@ void measure_temp(bool open_wire_check){
     Serial.println('\n');
   }
 
-  volt_meas.begin(measure_voltage,1000000);
+  //volt_meas.begin(measure_voltage,1000000);
 
 }
 
 bool reset_watchdog(){
+  int num_temp_masked[num_boards] = {0};    //number of open wire (temp = 150) thermistors per board to be masked
+  int mask_threshold = 3;                       //number of allowable open temperature sensor faults to be masked
+
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< num_cells; j++){
       if(cell_voltage[i][j] < OV && cell_voltage[i][j] > UV){
@@ -644,13 +649,22 @@ bool reset_watchdog(){
     }
   }
 
-    for(int i = 0; i < num_boards; i++){
-    for(int j = 0; j< 8; j++){          //9th temp sensor wired incorrectly
-      if((cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp) || (i==7 && j == 7)){   //board 8 temp sensor 8 open
+  for(int i = 0; i < num_boards; i++){
+    for(int j = 0; j< 9; j++){          //9th temp sensor wired incorrectly
+      if(cell_temp[i][j] == 150 || cell_temp[i][j] == -40){   //mask open wire faults
+        num_temp_masked[i] += 1;
+        if(num_temp_masked[i] >= 3){
+          digitalWrite(20, LOW);
+          Serial.print("Board "); Serial.print(i+1); Serial.print("Lost "); Serial.print(mask_threshold); Serial.println(" Sensors");
+          return false;
+        }
+        continue;
+      }
+      if(cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp){   //board 8 temp sensor 8 open
         continue;
       }
       else{
-          Serial.println("invalid temp");
+          Serial.print("invalid temp Board:  "); Serial.print(i+1); Serial.print("Num: "); Serial.println(j+1);
           digitalWrite(20, LOW);
           return false;
       }
@@ -658,7 +672,7 @@ bool reset_watchdog(){
   }
   digitalWrite(20, HIGH);
   wdt.feed();  
-  return true;  
+  return true;
 }
 
 float map_current(int ADC_in){
@@ -717,7 +731,7 @@ void measure_current(){
     currentMutex.unlock();
 }
 
-void send_CAN(){
+void send_CAN(bool enable){
   digitalWrite(STBY, LOW);
   digitalWrite(CTX3, HIGH);
   delay(1);
@@ -731,7 +745,7 @@ void send_CAN(){
   CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10);
   CHGR_EN.buf[2] = (uint8_t)(CHG_current*10 >> 8);
   CHGR_EN.buf[3] = (uint8_t)(CHG_current*10);
-  CHGR_EN.buf[4] = (uint8_t)(CHG_EN);
+  CHGR_EN.buf[4] = (uint8_t)(enable);
   CHGR_EN.buf[5] = 0;
   CHGR_EN.buf[6] = 0;
   CHGR_EN.buf[7] = 0;
@@ -828,6 +842,7 @@ void sense_status(){
   uint8_t response[num_boards][6];
   poll_ADC(ADSTAT);
   read_register_group(RDSTATA, response);
+  Serial.println("die_temps");
   for(int i = 0; i<num_boards;i++){
     die_temps[i]= (response[i][2] | response[i][3]<<8) * (0.0001/.0076) - 276;
     Serial.println(die_temps[i]);
@@ -921,7 +936,7 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
   write_register_group(WRCFGB, data_arr);
 }
 
-void myCallback() {               
+void myCallback() {       
   measure_voltage();
   reset_watchdog();
 }
