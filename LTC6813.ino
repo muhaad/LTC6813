@@ -52,7 +52,8 @@ float _qt = 12.6 * 60;
 
 //LTC6813 minimum supply voltage is 16V
 
-#define CS 10   //chip select pin 
+#define CS 10   //chip select pin isoSPI
+#define CS1 0   //chip select for ADC
 #define num_boards 10
 #define num_cells 14       //cells per board
 #define max_temp 50
@@ -88,7 +89,7 @@ IntervalTimer meas_temp;
 float gCurrent = 0;
 
 void setup() {
-  //measure_voltage();
+  
   //open shutdown circuit
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
@@ -104,6 +105,11 @@ void setup() {
   pinMode(CS,OUTPUT);
   SPI.begin();
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
+
+  pinMode(CS1, OUTPUT);
+  digitalWrite(CS1, HIGH);
+  SPI1.begin();
+  SPI1.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
 
   //SD card calls;
   //initializeSDCard();
@@ -127,7 +133,7 @@ void setup() {
   config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
   config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
   //config.callback = myCallback;
-  wdt.begin(config);
+  //wdt.begin(config);
 
   //current compensation
   //measure_current();
@@ -137,7 +143,117 @@ void setup() {
   //configure_sense();
 }
 
+
+void initialize_ADC(){
+  //ADC sampling time constant (without external filter) = 50 ohms * 40 pF
+  //CFR.B6 = 0 : uses external voltage reference
+  //CFR.B9 = 0, FSR_ADC_A = 0 to VREF_A and FSR_ADC_B = 0 to VREF_B
+  //CFR.B7 = 0 : single ended measurements
+  //CFR.B11 = 0 and CFR.B10 = 1  Single-SDO Mode
+  uint16_t regester_val;
+
+  Serial.println("Frame 0");
+  digitalWrite(CS1, LOW);
+  for(int i = 0; i<7; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("ADC readback: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+  delay(2);
+  
+  Serial.println("Frame 1");
+  digitalWrite(CS1, LOW);
+  regester_val = SPI1.transfer(0b10000100);
+  Serial.print("ADC readback: ");
+  Serial.println(regester_val, BIN);
+  regester_val = SPI1.transfer(0b00000000);
+  Serial.print("ADC readback: ");
+  Serial.println(regester_val, BIN);
+  for(int i = 0; i<7; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("ADC readback: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+  delay(2);
+
+  Serial.println("Frame 2");
+  digitalWrite(CS1, LOW);
+ for(int i = 0; i<7; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("ADC readback: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+
+
+}
+
+void read_ADC(){
+  //ADC sampling time constant (without external filter) = 50 ohms * 40 pF
+  //CFR.B6 = 0 : uses external voltage reference
+  //CFR.B9 = 0, FSR_ADC_A = 0 to VREF_A and FSR_ADC_B = 0 to VREF_B
+  //CFR.B7 = 0 : single ended measurements
+  //CFR.B11 = 0 and CFR.B10 = 1  Single-SDO Mode
+  uint16_t regester_val;
+
+  Serial.println("Frame 0");
+  digitalWrite(CS1, LOW);
+  for(int i = 0; i<6; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("Voltage Value: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+  delay(2);
+}
+
+void read_ADC_reg(){
+  uint16_t regester_val;
+
+ Serial.println("Frame 0");
+  digitalWrite(CS1, LOW);
+  for(int i = 0; i<6; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("ADC register: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+  delay(2);
+  
+  Serial.println("Frame 1");
+  digitalWrite(CS1, LOW);
+  regester_val = SPI1.transfer(0b00110000);
+  Serial.print("ADC register: ");
+  Serial.println(regester_val, BIN);
+  for(int i = 0; i<6; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("ADC register: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+  delay(2);
+
+  Serial.println("Frame 2");
+  digitalWrite(CS1, LOW);
+ for(int i = 0; i<6; i++){
+    regester_val = SPI1.transfer(0b00000000);
+    Serial.print("ADC register: ");
+    Serial.println(regester_val, BIN);
+  }
+  digitalWrite(CS1, HIGH);
+
+}
+
 void loop() {
+  initialize_ADC();
+
+  while(1){
+    read_ADC_reg();
+    read_ADC();
+    delay(1000);
+  }
 
   while(1){
     send_CAN(false);
