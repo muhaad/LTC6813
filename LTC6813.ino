@@ -20,7 +20,7 @@
 #define CTX3 22
 #define STBY 21     //CAN Transceiver Standby
 
-uint16_t CHG_voltage = 588;
+uint16_t CHG_voltage = 300;
 uint16_t CHG_current = 4;
 
 //pre-charge threshold
@@ -150,109 +150,91 @@ void initialize_ADC(){
   //CFR.B9 = 0, FSR_ADC_A = 0 to VREF_A and FSR_ADC_B = 0 to VREF_B
   //CFR.B7 = 0 : single ended measurements
   //CFR.B11 = 0 and CFR.B10 = 1  Single-SDO Mode
-  uint16_t regester_val;
+  //CFR.B15:B11 = 1000 (write) or 0011 (read)
+  uint8_t CFR_reg_MSB;
+  uint8_t CFR_reg_LSB;
+  uint8_t CFR_readback_MSB;                     
+  uint8_t CFR_readback_LSB;                     
+  CFR_reg_MSB = 0b10000100;  //CFR [B15:B8]
+  CFR_reg_LSB = 0b01000000;  //CFR [B7:B0]
 
-  Serial.println("Frame 0");
+  //Send write CFR register command
   digitalWrite(CS1, LOW);
-  for(int i = 0; i<7; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("ADC readback: ");
-    Serial.println(regester_val, BIN);
-  }
-  digitalWrite(CS1, HIGH);
-  delay(2);
-  
-  Serial.println("Frame 1");
-  digitalWrite(CS1, LOW);
-  regester_val = SPI1.transfer(0b10000100);
-  Serial.print("ADC readback: ");
-  Serial.println(regester_val, BIN);
-  regester_val = SPI1.transfer(0b00000000);
-  Serial.print("ADC readback: ");
-  Serial.println(regester_val, BIN);
-  for(int i = 0; i<7; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("ADC readback: ");
-    Serial.println(regester_val, BIN);
+  SPI1.transfer(CFR_reg_MSB);
+  SPI1.transfer(CFR_reg_LSB);
+  for(int i = 0; i<6; i++){   //clock ADC
+    SPI1.transfer(0b00000000);
   }
   digitalWrite(CS1, HIGH);
   delay(2);
 
-  Serial.println("Frame 2");
+  //Send read CFR register command while clocking the write config
   digitalWrite(CS1, LOW);
- for(int i = 0; i<7; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("ADC readback: ");
-    Serial.println(regester_val, BIN);
+  SPI1.transfer(0b00110000);
+  for(int i = 0; i<6; i++){
+    SPI1.transfer(0b00000000);    //clock ADC
+  }
+  digitalWrite(CS1, HIGH);
+  delay(2);
+
+  //readback the CFR configuration
+  digitalWrite(CS1, LOW);
+  CFR_readback_MSB = SPI1.transfer(0b00000000);
+  CFR_readback_LSB = SPI1.transfer(0b00000000);
+  for(int i = 0; i<6; i++){
+    SPI1.transfer(0b00000000);  //clock ADC
   }
   digitalWrite(CS1, HIGH);
 
-
+  //if CFR write value does not equal CFR read value
+  //the 4 MSBs of the CFR register (read/write command bits) are cleared in Frame F+2 which is not consistant with the datasheet
+  if((uint8_t)(CFR_reg_MSB<<4) != (uint8_t)(CFR_readback_MSB<<4) || (uint8_t)(CFR_reg_LSB<<4) != (uint8_t)(CFR_readback_LSB<<4)){   //bit-shifts to mask the 4 MSBs
+    Serial.println("ADC_initialization ERROR");
+    Serial.println((CFR_reg_MSB<<4), BIN);
+    Serial.println((CFR_reg_LSB<<4), BIN);
+  }
 }
+
 
 void read_ADC(){
-  //ADC sampling time constant (without external filter) = 50 ohms * 40 pF
-  //CFR.B6 = 0 : uses external voltage reference
-  //CFR.B9 = 0, FSR_ADC_A = 0 to VREF_A and FSR_ADC_B = 0 to VREF_B
-  //CFR.B7 = 0 : single ended measurements
-  //CFR.B11 = 0 and CFR.B10 = 1  Single-SDO Mode
-  uint16_t regester_val;
-
-  Serial.println("Frame 0");
+  uint16_t ADC_A;
+  uint16_t ADC_B;
+  float A_volt;
+  float B_volt;
+  uint16_t temp;
   digitalWrite(CS1, LOW);
-  for(int i = 0; i<6; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("Voltage Value: ");
-    Serial.println(regester_val, BIN);
+  for(int i = 0; i<2; i++){
+    temp = SPI1.transfer(0b00000000); //clock ADC
+    Serial.print("temp: "); Serial.println(temp, BIN);
+
   }
+  ADC_A = SPI1.transfer(0b00000000);
+  ADC_A = ADC_A << 8;
+  ADC_A = ADC_A | SPI1.transfer(0b00000000);
+  Serial.print("ADC_A: "); Serial.println(ADC_A);
+  ADC_B = SPI1.transfer(0b00000000);
+  ADC_B = ADC_B << 8;
+  ADC_B = ADC_B | SPI1.transfer(0b00000000);
+  Serial.print("ADC_B: "); Serial.println(ADC_B);
+  temp = SPI1.transfer(0b00000000);
+  Serial.print("temp: "); Serial.println(temp, BIN);
   digitalWrite(CS1, HIGH);
   delay(2);
-}
-
-void read_ADC_reg(){
-  uint16_t regester_val;
-
- Serial.println("Frame 0");
-  digitalWrite(CS1, LOW);
-  for(int i = 0; i<6; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("ADC register: ");
-    Serial.println(regester_val, BIN);
-  }
-  digitalWrite(CS1, HIGH);
-  delay(2);
-  
-  Serial.println("Frame 1");
-  digitalWrite(CS1, LOW);
-  regester_val = SPI1.transfer(0b00110000);
-  Serial.print("ADC register: ");
-  Serial.println(regester_val, BIN);
-  for(int i = 0; i<6; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("ADC register: ");
-    Serial.println(regester_val, BIN);
-  }
-  digitalWrite(CS1, HIGH);
-  delay(2);
-
-  Serial.println("Frame 2");
-  digitalWrite(CS1, LOW);
- for(int i = 0; i<6; i++){
-    regester_val = SPI1.transfer(0b00000000);
-    Serial.print("ADC register: ");
-    Serial.println(regester_val, BIN);
-  }
-  digitalWrite(CS1, HIGH);
+  A_volt = (float)(ADC_A)/65535*5;
+  B_volt = (float)(ADC_B)/65535*5;
+  Serial.print("A Voltage: "); Serial.println(A_volt);
+  Serial.print("B Voltage: "); Serial.println(B_volt);
 
 }
 
 void loop() {
-  initialize_ADC();
+  //delay(3000);
+  //initialize_ADC();
 
   while(1){
-    read_ADC_reg();
-    read_ADC();
-    delay(1000);
+    RX_CAN();
+    send_CAN(true);
+    delay(500);
   }
 
   while(1){
@@ -620,7 +602,7 @@ void write_register_group(uint16_t command, uint8_t data[num_boards][6]){
 void poll_ADC(uint16_t command){
   uint8_t return_data = 0;
 
-  //do not interuppt during SPI communication
+  //do not interupt during SPI communication
   // noInterrupts();
   send_command(command);
 
@@ -853,10 +835,12 @@ void send_CAN(bool enable){
   delay(1);
   digitalWrite(CTX3, LOW);
   CAN_message_t CHGR_EN;
+  //CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
   CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
+  //CHGR_EN.id = 0x18FF50E5;
   CHGR_EN.flags.extended = 1; 
   CHGR_EN.len = 8;     // Set the data length
-
+  //7FF max CAN ID
   CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10 >> 8);
   CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10);
   CHGR_EN.buf[2] = (uint8_t)(CHG_current*10 >> 8);
@@ -882,16 +866,18 @@ void RX_CAN(){
   bool received = false;
   while (received == false) {
     can.read(msg);
-    Serial.print("ID: ");
-    Serial.print(msg.id, HEX);
-    Serial.println(" Data: ");
-    msg.len = 16;
-    for (int i = 0; i < msg.len; i++) {
-      Serial.print(msg.buf[i], BIN);
-      Serial.print(" ");
+    if(msg.id != 0){
+      Serial.print("ID: ");
+      Serial.print(msg.id, HEX);
+      Serial.println(" Data: ");
+      msg.len = 16;
+      for (int i = 0; i < msg.len; i++) {
+        Serial.print(msg.buf[i], BIN);
+        Serial.print(" ");
+      }
+      Serial.print('\n');
     }
     received = true;
-    Serial.print('\n');
   }
 }
 
@@ -1027,7 +1013,7 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
   VUV = UV/(16*0.0001)-1;     //Comparison Voltage = (VUV + 1) • 16 • 100μV  (pg. 68 in datasheet)
   VOV = OV/(16*0.0001);       //Comparison Voltage = VOV • 16 • 100μV        (pg. 68 in datasheet)
   ////configuration register group A////
-  for(int i; i< num_boards; i++){
+  for(int i = 0; i< num_boards; i++){
     data[0] = 0b11111100;     //GPIO1-5 = 1 (pull-down off), REFON=1, DTEN=0, ADCOPT=0
     data[1] = (uint8_t) VUV;
     data[2] = (uint8_t) (VOV & 0b11110000) | (VUV>>8 & 0b00001111);
@@ -1039,7 +1025,7 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
 
   write_register_group(WRCFGA, data_arr);
   ////configuration register group B/////
-    for(int i; i< num_boards; i++){
+    for(int i = 0; i< num_boards; i++){
     data[0] = (uint8_t) discharge[i][15]<<7 | discharge[i][14]<<6 | discharge[i][13]<<5 |discharge[i][12]<<4 | 0b1111;
     data[1] = (uint8_t) discharge[i][17] | discharge[i][16];
     data[2] = (uint8_t) 0b00000000;
