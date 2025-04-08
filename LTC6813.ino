@@ -1,9 +1,9 @@
 #include <SPI.h>
 #include <cmath>
 #include <string>
-#include "LTC681x.h"
 
 #include "COMMANDS.h"
+#include "CONFIGURE.h"
 #include "HEADER.h"
 #include "LUTS.h"
 
@@ -16,96 +16,81 @@
 #include <SD.h>
 #include <TeensyThreads.h>
 
+//CAN pins
 #define CRX3 23
 #define CTX3 22
 #define STBY 21     //CAN Transceiver Standby
 
-uint16_t CHG_voltage = 300;
-uint16_t CHG_current = 4;
-
-//pre-charge threshold
-#define THRESHOLD 0.5
-
+//SD card pins
 const int chipSelect = BUILTIN_SDCARD;
 
+//SPI pins
+#define CS 10   //chip select pin isoSPI
+#define CS1 0   //chip select for ADC
+
+//flags
+int wire_cut = 0;
+bool memory_fault = 0;
+bool comms_fault = 0;
+bool watchdog_callback = 0;
+bool watchdog_reset = 0;
+bool debug = 0;
+
+float real_time = 0;    //possibly get real time (or some relative CAN network time) from data aquisition system for log synchronization purposes with inverter and ECU?
 int start_time = 0;
+
+float memory = 0;
 bool CHG_EN = 0; //0: enable charging, 1: disable charging
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;
 
-IntervalTimer ADC;
-
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
 // // Shared variables
+float current;
 float currentSum = 0.0;
 int currentCount1 = 0;
 float averagedCurrent = 0.0;
-Threads::Mutex currentMutex;
+float current_offset = 0;
+float gCurrent = 0;   //global variable to hold current current.
 
 //state of charge
-float soc = 0.00000000;
-//total capacity( coulumbs): total capacity (Ah) * 60s/1hr
-float _qt = 12.6 * 60;
-
-// Threads::Mutex ADC;
+float soc = 0.0;
 
 //LTC6813 minimum supply voltage is 16V
-
-#define CS 10   //chip select pin isoSPI
-#define CS1 0   //chip select for ADC
-#define num_boards 10
-#define num_cells 14       //cells per board
-#define max_temp 50
-#define min_temp 0
-#define wake_delay 2    //wake delay per board (milliseconds) to bring up power supply to voltage. Depends on Linear voltage regulator capacitance
-#define cell_RC 0.0001  //C pin filter RC time constant in milliseconds (R*C*1000)
-
-int wire_cut = 0;
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
 float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
-float die_temps[num_boards];
-float current;
+float die_temps[num_boards];                   //most recent sense board LTC6813 die temps
+
+//sense board flags
 float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
-float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
-float UV = 2.8;       //under-voltage limit       (V)
-
-//balancing parameters
-float balance_threshold = 3.85;    //will not balance cells below this threshold (V)
-float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
-
-float current_offset = 0;
-
-//timinig threads
-IntervalTimer curr_meas;
-IntervalTimer volt_meas;
-IntervalTimer write_SD;
-IntervalTimer meas_temp;
-
-//global variable to hold current current.
-float gCurrent = 0;
-
 void setup() {
-  
   //open shutdown circuit
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
-  //dump data from SD card to external program--Arduino IDE serial monitor will need to be off
+
+  //startup timestamp
+  start_time = millis();
+  
+  //dump data from SD card to external program-- Arduino IDE serial monitor will need to be off
   //*******
   Serial.begin(9600);
   //delay(5000);
   //dumpDataToSerial();
   //delay(1000);
   Serial.println("startup");
+  Serial.print("Start Time: "); Serial.println(start_time);
 
-  //SPI
+  //SPI (isoSPI)
   pinMode(CS,OUTPUT);
+  digitalWrite(CS, HIGH);
   SPI.begin();
   SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE0));
 
+  //SPI1 (ADC)
   pinMode(CS1, OUTPUT);
   digitalWrite(CS1, HIGH);
   SPI1.begin();
@@ -116,9 +101,7 @@ void setup() {
   /*will set soc to previous known value. Must manually delete soc.txt file
   *from sd card at first start up (when battery is fully charged)- or add switch/push button that we could use to reset soc
   */
-  //manage_soc();
-  start_time = millis();
-  Serial.println(start_time);
+
   //CAN
   pinMode(CRX3, INPUT);
   pinMode(CTX3, OUTPUT);
@@ -135,12 +118,18 @@ void setup() {
   //config.callback = myCallback;
   //wdt.begin(config);
 
-  //current compensation
+  //current offset compensation
   //measure_current();
   //current_offset = current;
 
   //Bring up references on sense boards
   //configure_sense();
+
+  //Bring up ADC
+  //initialize_ADC();
+
+  //get_SOC();
+  //check_memory();
 }
 
 
@@ -224,17 +213,34 @@ void read_ADC(){
   B_volt = (float)(ADC_B)/65535*5;
   Serial.print("A Voltage: "); Serial.println(A_volt);
   Serial.print("B Voltage: "); Serial.println(B_volt);
-
 }
 
 void loop() {
   //delay(3000);
   //initialize_ADC();
-
   while(1){
+    dumpDataToSerial();
+  }
+  if(mode == "charge"){
     RX_CAN();
     send_CAN(true);
     delay(500);
+  }
+
+  if(mode == "drive"){
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    //send_CAN();
+    reset_watchdog();
+    //RX_CAN();
+    // writeDataToSD();
+    delay(1000);  
+  }
+
+  if(mode == "debug"){
+
+
   }
 
   while(1){
@@ -250,25 +256,15 @@ void loop() {
     send_CAN(true);
     delay(2000);  }
 
-
   digitalWrite(20, LOW);
   measure_voltage();
   measure_temp();
   sense_status();
   
-  //wait for ready to drive to start measurement threads
-  Serial.println("Pre-charging...");
-  float curr = gCurrent;
-  while(curr < THRESHOLD){
-    measure_current();
-    curr = gCurrent;
-    delay(1000);
-  }
+
   //begin measurments
   //curr_meas.begin(measure_current, 1000);
   //volt_meas.begin(measure_voltage,1000000);
-  //write_SD.begin(writeDataToSD,1300000);
-  Serial.println("Ready to drive.");
   
   while(1){
     measure_voltage();
@@ -277,7 +273,7 @@ void loop() {
     //send_CAN();
     reset_watchdog();
     //RX_CAN();
-    // writeDataToSD();
+    //writeDataToSD();
     delay(1000);  
   }
 
@@ -302,11 +298,19 @@ void print_min_max(float* max_voltage){   //This function prints the min and max
 }
 
 
-// // dump CSV data from last run to the serial port and delete the file
+// // we should be able to create a file per power cycle
 // //should be called in setup()
 void dumpDataToSerial() {
+  while(1){
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+    if(input == "hello from python"){
+      break;
+    }
+  }
   if (!SD.begin(chipSelect)) {
-    // Serial.println("SD card initialization failed!");
+    Serial.println("SD card initialization failed!");
+    memory_fault = 1;
     return;
   }
 
@@ -314,20 +318,39 @@ void dumpDataToSerial() {
   File dataFile = SD.open("data.csv");
   
   if (dataFile) {
-    // Send file size as header
-    unsigned long fileSize = dataFile.size();
-    Serial.println(fileSize);
-
     // Send file content
     while (dataFile.available()) {
       Serial.write(dataFile.read());
     }
     dataFile.close();
-
     // Delete the file after sending its contents
-    SD.remove("data.csv");
-  } else {
+    //SD.remove("data.csv");
+  } 
+  else {
     Serial.println("Error opening data.csv for reading");
+  }
+}
+
+void check_memory(){    //this should check all files
+  if (!SD.begin(chipSelect)) {
+    Serial.println("SD card initialization failed!");
+    memory_fault = 1;
+    return;
+  }
+  if(SD.exists("state.txt")){
+    File dataFile = SD.open("data.csv");
+    unsigned long fileSize = dataFile.size();   //file size in bytes
+    Serial.println(fileSize);
+    memory = fileSize / pow(10,6);
+    Serial.println(memory);
+    if(memory > 0.9*SD_card_size){
+      Serial.println("SD card over 90% full");
+      memory_fault = 1;
+    }
+  }
+  else{
+    Serial.println("data.csv not found");
+    memory_fault = 1;
   }
 }
 
@@ -342,35 +365,39 @@ float extractChargeValue(const String& line) {
   return 100.00; // Return full charge value if "Charge: " is not found
 }
 
-void manage_soc(){
+void get_SOC(){
   if (!SD.begin(chipSelect)) {
-    Serial.println("Failed to read SD card for soc.");
+    Serial.println("Failed to read SD card");
+    memory_fault = 1;
     return;
   }
-  if(SD.exists("soc.txt")){
-    File socFile = SD.open("soc.txt", FILE_READ);
-    if (socFile) {
-      //get last value of soc
-      String lastLine;
-      while (socFile.available()) {
-        lastLine = socFile.readStringUntil('\n');
+  if(SD.exists("state.txt")){
+    File file = SD.open("state.txt", FILE_READ);
+    if (file) {
+      String line;
+      while (file.available()) {
+        line = file.readStringUntil('\n');
+        Serial.println(line);
+        int delim_index = line.indexOf(':');
+        String name = line.substring(0, delim_index);
+        String value = line.substring(delim_index + 1);
+        map_text2var(name, value);
       }
-      String soc_str = extractChargeValue(lastLine);
-      Serial.print("Read Charge: " + soc_str);
-      soc = soc_str.toFloat();
-      socFile.close();
-      Serial.print("State of charge: ");
-      Serial.println(soc);
-    }else {
-      Serial.println("Error opening soc.txt for reading");
+      file.close();
     }
-  }else {
-    File socFile = SD.open("soc.txt", FILE_WRITE);
+  }
+  else {
+    File file = SD.open("state.txt", FILE_WRITE);
     Serial.println("Initializing state of charge to 100%");
-    soc = 100.0;
-    socFile.println("Time: 0, Charge: 100.00000000");
-    socFile.close();
-    Serial.println("soc.txt initialized.");
+    file.close();
+    Serial.println("state.txt initialized.");
+  }
+}
+
+void map_text2var(String name, String value){     //map text name and value to a variable
+  if(name == "SOC:"){
+    soc = value.toFloat();
+    Serial.println(soc);
   }
 }
 
@@ -458,7 +485,7 @@ void initializeSDCard() {
     Serial.println("SD card initialization failed!");
     return;
   }
-  SD.remove("data.csv");
+  SD.remove("data.csv");                          
   File dataFile = SD.open("data.csv", FILE_WRITE);
   
   if (dataFile) {
@@ -479,11 +506,11 @@ void initializeSDCard() {
 }
 
 float avgCurrent() {
-  currentMutex.lock();
+  //currentMutex.lock();
   float average = (currentCount1 == 0) ? 0.0 : currentSum / currentCount1;
   currentSum = 0.0;
   currentCount1 = 0;
-  currentMutex.unlock();
+  //currentMutex.unlock();
 
   // Serial.println(average);
   
@@ -503,7 +530,7 @@ void send_command(uint16_t command){
 
   wakeup_sleep(num_boards);
 
-  delay(2);                 //small delay is needed after wake to bring up power supply
+  //delay(2);          
   digitalWrite(CS, LOW);
 
   comm_arr[0] = cmd0;
@@ -725,7 +752,6 @@ void measure_temp(bool open_wire_check){
     Serial.println('\n');
   }
 
-  //volt_meas.begin(measure_voltage,1000000);
 
 }
 
@@ -773,60 +799,35 @@ bool reset_watchdog(){
   return true;
 }
 
-float map_current(int ADC_in){
-    float ADC_volt;
-    float Hall_volt;
-    float current;
-    //Serial.println(ADC_in);
-    ADC_volt = float(ADC_in)/1023*3.3;
-    //Serial.println(ADC_volt);
-    Hall_volt = ADC_volt*(10000+5100)/10000;
-    //Serial.println(Hall_volt);
-    current = (Hall_volt-0.25)/(4.5)*(100)-50; 
-
-    return current;
-
-}
 void measure_current(){
-    //default to low current mode
-    static bool low_curr_mode = true;
-    float current;
+  uint16_t ADC;
+  float volt;
+  digitalWrite(CS1, LOW);
 
-    float R1 = 10000;   //bottom resistor in voltage divider (ohms)
-    float R2 = 5100;    //top resistor in voltage divier (ohms)
-    int ADC_in;
+  for(int i = 0; i<2; i++){
+    SPI1.transfer(0b00000000); //clock ADC
+  }
 
-    //low current mode
-    if (low_curr_mode) {
-      ADC_in = analogRead(A10);       // 0-1023 integer
-      current = map_current(ADC_in);
+  ADC = SPI1.transfer(0b00000000);
+  ADC = ADC << 8;
+  ADC = ADC | SPI1.transfer(0b00000000);
+  volt = (float)(ADC)/65535*5;
+  current = (volt-0.25)/(4.5)*(100)-50;   //this needs checked
+  
+  if(current > 50){                        //so does this
+  ADC = SPI1.transfer(0b00000000);
+  ADC = ADC << 8;
+  ADC = ADC | SPI1.transfer(0b00000000);
+  volt = (float)(ADC)/65535*5;
+  current = (volt-0.25)/(4.5)*(100)-50;   //this needs checked
+  }
 
-      if (current > 49) {
-        low_curr_mode = false;
-        //retake measurement in high current mode
-        ADC_in = analogRead(A11);
-        current = map_current(ADC_in);
-      }
-    //high current mode
-    }else {
-      ADC_in = analogRead(A10);
-      current = map_current(ADC_in);
-      //switch to low current mode if measurement is low
-      if (current < 49) {
-        low_curr_mode = true;
-        //retake measurement in low current mode
-        ADC_in = analogRead(A11);
-        current = map_current(ADC_in);
-      }
-    }
+  digitalWrite(CS1, HIGH);
+  gCurrent = current;
 
-    gCurrent = current;
-
-    //update current 
-    currentMutex.lock();
-    currentSum += current;
-    currentCount1++;
-    currentMutex.unlock();
+  //update current 
+  currentSum += current;
+  currentCount1++;
 }
 
 void send_CAN(bool enable){
@@ -837,7 +838,7 @@ void send_CAN(bool enable){
   CAN_message_t CHGR_EN;
   //CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
   CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
-  //CHGR_EN.id = 0x18FF50E5;
+  //CHGR_EN.id = 0x18FF50E5;  //charger send can id?
   CHGR_EN.flags.extended = 1; 
   CHGR_EN.len = 8;     // Set the data length
   //7FF max CAN ID
@@ -940,7 +941,7 @@ void balance(bool keep_going){
   }
 }
 
-void sense_status(){
+void sense_status(){              //really should be the measure die temp function
   uint8_t response[num_boards][6];
   poll_ADC(ADSTAT);
   read_register_group(RDSTATA, response);
@@ -1041,4 +1042,46 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
 void myCallback() {       
   measure_voltage();
   reset_watchdog();
+}
+
+
+//Analog Devices provided Functions
+
+void wakeup_sleep(uint8_t total_ic) //Number of ICs in the system
+{
+	for (int i =0; i<total_ic; i++)
+	{
+	   digitalWrite(CS, LOW);
+	   delay(0.300); // Guarantees the LTC681x will be in standby
+	   digitalWrite(CS, HIGH);
+	   delay(0.010);
+	}
+}
+
+uint16_t pec15_calc(uint8_t len, //Number of bytes that will be used to calculate a PEC
+                    uint8_t *data //Array of data that will be used to calculate  a PEC
+                   )
+{
+	uint16_t remainder,addr;
+	remainder = 16;//initialize the PEC
+	
+	for (uint8_t i = 0; i<len; i++) // loops for each byte in data array
+	{
+		addr = ((remainder>>7)^data[i])&0xff;//calculate PEC table address
+		#ifdef MBED
+			remainder = (remainder<<8)^crc15Table[addr];
+		#else
+			remainder = (remainder<<8)^pgm_read_word_near(crc15Table+addr);
+		#endif
+	}
+	
+	return(remainder*2);//The CRC15 has a 0 in the LSB so the remainder must be multiplied by 2
+}
+
+void wakeup_idle(uint8_t total_ic){ //Number of ICs in the system
+	for (int i =0; i<total_ic + 2; i++){    //+2 for the LTC6820s
+  digitalWrite(CS, LOW);
+  SPI.transfer(0b11111111);     //Guarantees the isoSPI will be in ready mode
+  digitalWrite(CS, HIGH);
+	}
 }

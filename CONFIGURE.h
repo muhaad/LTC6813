@@ -5,21 +5,34 @@
 
 #include <stdint.h>
 
+//Safe operating conditions
+const float max_temp = 60;
+const float min_temp = 0;
+const float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
+const float UV = 2.8;       //under-voltage limit (V)
+
+//architecture
+const int num_boards = 10;
+const int num_cells = 14;       //cells per board
+
+//BMS operation mode. Leave empty to determine mode during runtime
+String mode = "";     //"", "charge", "drive", "debug"
+
+//charging parameters
+uint16_t CHG_voltage = 300;
+uint16_t CHG_current = 4;
+float _qt = 12.6 * 60; //total capacity (coulumbs): total capacity (Ah) * 60s/1hr
+
+//balancing parameters
+float balance_threshold = 3.85;    //will not balance cells below this threshold (V)
+float max_differnce = 0.3;    //will not continue charging if max-min cell exceeds this threshold
+
+//sense board parameters
 int ADC_mode = 0;     //integer 0-7 to set ADC sampling frequency
+#define wake_delay 2    //wake delay per board (milliseconds) to bring up power supply to voltage. Depends on Linear voltage regulator capacitance
+#define cell_RC 0.0001  //C pin filter RC time constant in milliseconds (R*C*1000)
 
-
-            //       0      1      2     3     4     5     6      7
-cell_conv_delays =  [1121,  1296,  2343, 3041, 4437, 7230, 12816, 201325];     //conversion time (in microseconds) of ADCs to measure all cells upon ADCV command based on ADC frequency
-           //        27kHz  14kHz  7kHz   3kHz 2kHz  1kHz  422Hz  26Hz
-cell_conv_delay = cell_conv_delays[ADC_mode];
-            //       0      1      2     3     4     5     6      7
-aux_conv_delays =  [1825, 2116, 3862, 5025, 7353, 12007, 21316, 335498];     //conversion time (in microseconds) of ADCs to measure all GPIO upon ADAX(D) commands based on ADC frequency
-           //        27kHz  14kHz  7kHz   3kHz 2kHz  1kHz  422Hz  26Hz
-aux_conv_delay = aux_conv_delays[ADC_mode];
-            //       0      1      2     3     4     5     6      7
-stat_conv_delays =  [742, 858, 1556, 2022, 2953, 4814, 8538, 134211];     //conversion time (in microseconds) of ADCs to measure status based on ADC frequency
-           //        27kHz  14kHz  7kHz   3kHz 2kHz  1kHz  422Hz  26Hz
-stat_conv_delay = stat_conv_delays[ADC_mode];
-
+//SD Card
+float SD_card_size = 116;   //SD card size in Gb
 
 #endif

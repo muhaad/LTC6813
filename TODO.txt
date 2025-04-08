@@ -1,19 +1,27 @@
-warnings
+add warnings
 Use Binary Search to map NTC resistance value to temperature
 Add 200A current sensing
 Add CAN  (charging, status, SOC message, warnings)
-Add Open Wire checks (mask up to X disconnected temperature sensors per board)
-Add Nominal, warning, and faluire status to BMS indicator light
-Add sense board Initialization, status check (wire cut)
+Add Open Wire checks (mask temperature measurements in config file)
+Add Nominal, warning, and failure status to BMS indicator light
+Add sense board Initialization, status check (open wire, over and under voltage cells) (add flags for each condition)
 UI?
 Telematics?
-Timers (wake from sleep, charger)
-fix watchdog feed condition (only feed when nominal status)
+Timers (wake from sleep, charger timeout)
 Use platformIO?
 clear measurements after reading (add condition to watchdogfeed to make sure they are clear)
 Figure out why boards don't discharge timeout after stopping communitcation
 Find out the maximum PWM that a single cell can be discharged at without going over 80C
 fix minimum cell comparision which causes all lowest cell to be discharged to 0.01V lower
+
+
+realtime time stamps?
+debug mode (eliminate print statements in critical sections unless debug flag is set)
+bidirectional isospi loop
+measurement memory buffers
+Ensure synchronous current and voltage measurements (add current measurement while BMS is blocking for the voltage tap ADCs)
+BMS standby-> drive -> standby mode (inverter voltage threshold to enter and exit ready to drive)
+
 
 
 
