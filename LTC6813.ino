@@ -26,6 +26,7 @@ const int chipSelect = BUILTIN_SDCARD;
 
 //SPI pins
 #define CS 10   //chip select pin isoSPI
+#define CS2 38   //3nd chip select pin isoSPI
 #define CS1 0   //chip select for ADC
 
 //flags
@@ -323,6 +324,7 @@ void dumpDataToSerial() {
       Serial.write(dataFile.read());
     }
     dataFile.close();
+    Serial.println("serial dump done");
     // Delete the file after sending its contents
     //SD.remove("data.csv");
   } 
@@ -570,13 +572,11 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
     pec = pec15_calc(6, response[i]);
     pec1 = pec >> 0;
     pec0 = pec >> 8;
-    
-    if(response_pec0 != pec0 || response_pec1 != pec1){
-      read_register_group(command, response);
-    }
+  
   // interrupts();
   
-  if(response_pec0 != pec0 || response_pec1 != pec1){
+  if(response_pec0 != pec0 || response_pec1 != pec1){   //this recursion needs fixed
+    wake_sleep(num_boards);
     read_register_group(command, response);
   }
 

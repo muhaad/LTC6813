@@ -1,12 +1,27 @@
 add warnings
 Use Binary Search to map NTC resistance value to temperature
-Add 200A current sensing
+Add 200A current sensing (this is a hardware issue)
+
 Add CAN  (charging, status, SOC message, warnings)
-Add Open Wire checks (mask temperature measurements in config file)
-Add Nominal, warning, and failure status to BMS indicator light
+Add voltage-charge lookup table for SOC estimation
+debug mode (eliminate print statements in sections unless debug flag is set)
 Add sense board Initialization, status check (open wire, over and under voltage cells) (add flags for each condition)
-UI?
-Telematics?
+Add code to create a redundant loop for isoSPI communications 
+clear measurements after reading (add condition to watchdogfeed to make sure they are clear)
+measurement FIFO queue
+Add sense board Initialization (set under and over voltage/temperature limits for cells)
+BMS sense board status check (open wire, over and under voltages)
+Timer that count time since last isoSPI message was sent. Determine whether to wake boards from sleep
+Timer that counts since last CAN message was sent. 
+User Interface
+Ensure synchronous current and voltage measurements (add current measurement while BMS is blocking for the voltage tap ADCs)
+
+
+
+Add Open Wire checks (mask temperature measurements in config file)
+EV2
+Find out the maximum PWM that a single cell can be discharged at without going over 80C
+Add Nominal, warning, and failure status to BMS indicator light?
 Timers (wake from sleep, charger timeout)
 Use platformIO?
 clear measurements after reading (add condition to watchdogfeed to make sure they are clear)
@@ -15,12 +30,25 @@ Find out the maximum PWM that a single cell can be discharged at without going o
 fix minimum cell comparision which causes all lowest cell to be discharged to 0.01V lower
 
 
-realtime time stamps?
 debug mode (eliminate print statements in critical sections unless debug flag is set)
 bidirectional isospi loop
-measurement memory buffers
+measurement memory buffers 
 Ensure synchronous current and voltage measurements (add current measurement while BMS is blocking for the voltage tap ADCs)
 BMS standby-> drive -> standby mode (inverter voltage threshold to enter and exit ready to drive)
+
+
+
+realtime time stamps?
+
+
+function check_memory
+We want to check how much memory is left on the SD card
+-sum the size of every file on the SD card 
+
+
+
+There should be a function that starts
+
 
 
 
