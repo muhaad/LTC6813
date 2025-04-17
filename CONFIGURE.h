@@ -12,8 +12,8 @@ const float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero
 const float UV = 2.8;       //under-voltage limit (V)
 
 //architecture
-const int num_boards = 10;
-const int num_cells = 14;       //cells per board
+const int num_boards = 4;
+const int num_cells = 17;       //cells per board
 
 //BMS operation mode. Leave empty to determine mode during runtime
 String mode = "";     //"", "charge", "drive", "debug"

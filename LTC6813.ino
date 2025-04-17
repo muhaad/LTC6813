@@ -217,6 +217,18 @@ void read_ADC(){
 }
 
 void loop() {
+
+   while(1){
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    //send_CAN();
+    reset_watchdog();
+    //RX_CAN();
+    //writeDataToSD();
+    delay(1000);  
+  }
+
   //delay(3000);
   //initialize_ADC();
   while(1){
@@ -576,7 +588,7 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   // interrupts();
   
   if(response_pec0 != pec0 || response_pec1 != pec1){   //this recursion needs fixed
-    wake_sleep(num_boards);
+    wakeup_sleep(num_boards);
     read_register_group(command, response);
   }
 
