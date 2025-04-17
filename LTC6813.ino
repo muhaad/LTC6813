@@ -53,9 +53,9 @@ float _qt = 12.6 * 60;
 //LTC6813 minimum supply voltage is 16V
 
 #define CS 10   //chip select pin 
-#define num_boards 10
-#define num_cells 14       //cells per board
-#define max_temp 50
+#define num_boards 4
+#define num_cells 17       //cells per board
+#define max_temp 45
 #define min_temp 0
 #define wake_delay 2    //wake delay per board (milliseconds) to bring up power supply to voltage. Depends on Linear voltage regulator capacitance
 #define cell_RC 0.0001  //C pin filter RC time constant in milliseconds (R*C*1000)
@@ -70,7 +70,7 @@ bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
 float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
-float UV = 2.8;       //under-voltage limit       (V)
+float UV = 2.5;       //under-voltage limit       (V)
 
 //balancing parameters
 float balance_threshold = 3.85;    //will not balance cells below this threshold (V)
@@ -140,7 +140,7 @@ void setup() {
 void loop() {
 
   while(1){
-    send_CAN(false);
+    //send_CAN(false);
     measure_voltage();
     measure_temp();
     measure_current();
@@ -561,11 +561,11 @@ void measure_voltage(){
 float map_temp(float V){
   int i;
   int size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
-  float R_bias = 10200;
+  float R_bias = 10000;
   float V_ref = 3.00;
 
   if(V_ref == V){   //divide by zero case
-    return -40;
+    return -55;
   }
 
   float NTC_res = (V/V_ref*R_bias)/(1-V/V_ref);
@@ -582,7 +582,8 @@ float map_temp(float V){
       break;
     }
   }
-  float temperature = float(i)/float(size)*(150+40)-40;
+  float temperature = float(i)/float(size)*(150+55)-55;
+  //temperature = V;
   return(temperature);
 }
 
