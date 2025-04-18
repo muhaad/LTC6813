@@ -37,13 +37,12 @@ bool watchdog_callback = 0;
 bool watchdog_reset = 0;
 bool debug = 0;
 
-float real_time = 0;    //possibly get real time (or some relative CAN network time) from data aquisition system for log synchronization purposes with inverter and ECU?
-int start_time = 0;
+unsigned int start_time = 0;
 
 float memory = 0;
 bool CHG_EN = 0; //0: enable charging, 1: disable charging
 
-FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;
+FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;      //    https://github.com/tonton81/FlexCAN_T4/tree/master
 
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
@@ -111,13 +110,26 @@ void setup() {
   can.setBaudRate(250000);
   can.enableFIFO();
 
+  //    https://github.com/tonton81/FlexCAN_T4/blob/master/examples/mailbox_filtering_example_with_interrupts/mailbox_filtering_example_with_interrupts.ino
+  //int NUM_RX_MAILBOXES = 2;
+  //can.setMaxMB(NUM_RX_MAILBOXES);
+  //FLEXCAN_MAILBOX INV_filter;
+  //FLEXCAN_MAILBOX CHG_filter;
+  can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
+  can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
+
+  can.setMBFilter(MB0, INV_TX_ID);  //Mailbox for Inverter CAN messages
+  can.setMBFilter(MB1, CHG_TX_ID);  //Mailbox for Charger CAN Messages
+
   //Watchdog
-  WDT_timings_t config;
-  config.trigger = 4; /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
-  config.timeout = 5; /* in seconds, 0->128 */   //time until watchdog reset
-  config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
-  //config.callback = myCallback;
-  //wdt.begin(config);
+  if(watchdog_timeout){
+    WDT_timings_t config;
+    config.trigger = max(1,  watchdog_timeout - 1);   /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
+    config.timeout = watchdog_timeout;               /* in seconds, 0->128 */   //time until watchdog reset
+    config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
+    config.callback = myCallback;
+    wdt.begin(config);
+  }
 
   //current offset compensation
   //measure_current();
@@ -129,10 +141,115 @@ void setup() {
   //Bring up ADC
   //initialize_ADC();
 
+  //check_memory();
   //get_SOC();
   //check_memory();
+
+  if(mode == ""){
+    int curr_time = millis();
+    CAN_message_t msg;
+    while(curr_time < start_time + 5000){     //Enters Debug Mode after 5 Seconds if no CAN message from Inverter or Charger is detected
+      msg = RX_CAN();
+      if(msg.id == INV_TX_ID){    //check ID rather than mailbox number. Mailbox Behavior not clearly defined
+        mode = "standy";
+        //can.setMBFilter(MB1, 0);  //Disable Charger Mailbox
+        break;
+      }
+      else if(msg.id == CHG_TX_ID){
+        mode = "charge";
+        //can.setMBFilter(MB0, 0);  //Disable Inverter Mailbox
+        break;
+      }
+  
+      // if(mode == "charge" || "standby"){                 //example of flushing 2 CAN mailboxes. Dont need this code because inverter and charger don't use can bus at the same time. 
+      //   // Stop mailbox interrupts (pauses reception)
+      //   can.disableMBInterrupts();
+      //   for(int i = 0; i<2; i++){     //flush both mailboxes
+      //     RX_CAN();
+      //   }
+      //   can.enableMBInterrupts()     //enable reception
+      //   break;
+      // }
+
+    }
+  }
+  mode = "debug";
 }
 
+void loop() {
+   while(1){
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    //charger_enable();
+    reset_watchdog();
+    //RX_CAN();
+    //writeDataToSD();
+    delay(1000);  
+  }
+  //delay(3000);
+  //initialize_ADC();
+  if(mode == "charge"){
+    Serial.println("Charge Mode Entered");
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    reset_watchdog();
+    charger_enable(true);
+    delay(500);
+  }
+
+  if(mode == "standby"){                  //waiting to drive
+    Serial.println("Standby Mode Entered");
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    //charger_enable();
+    reset_watchdog();
+    //RX_CAN();
+    // writeDataToSD();
+    delay(1000);  
+  }
+
+  if(mode == "drive"){
+    
+  }
+
+  if(mode == "debug"){
+    Serial.println("Debug Mode Entered");
+  }
+
+
+  while(1){
+    charger_enable(false);
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    if(reset_watchdog()){
+      //balance(false);
+    }
+    delay(1000);
+      //balance(false);
+    charger_enable(true);
+    delay(2000);  }
+
+  digitalWrite(20, LOW);
+  measure_voltage();
+  measure_temp();
+  sense_status();
+  
+  while(1){
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    //charger_enable();
+    reset_watchdog();
+    //RX_CAN();
+    //writeDataToSD();
+    delay(1000);  
+  }
+
+}
 
 void initialize_ADC(){
   //ADC sampling time constant (without external filter) = 50 ohms * 40 pF
@@ -176,7 +293,6 @@ void initialize_ADC(){
   }
   digitalWrite(CS1, HIGH);
 
-  //if CFR write value does not equal CFR read value
   //the 4 MSBs of the CFR register (read/write command bits) are cleared in Frame F+2 which is not consistant with the datasheet
   if((uint8_t)(CFR_reg_MSB<<4) != (uint8_t)(CFR_readback_MSB<<4) || (uint8_t)(CFR_reg_LSB<<4) != (uint8_t)(CFR_readback_LSB<<4)){   //bit-shifts to mask the 4 MSBs
     Serial.println("ADC_initialization ERROR");
@@ -184,7 +300,6 @@ void initialize_ADC(){
     Serial.println((CFR_reg_LSB<<4), BIN);
   }
 }
-
 
 void read_ADC(){
   uint16_t ADC_A;
@@ -216,81 +331,6 @@ void read_ADC(){
   Serial.print("B Voltage: "); Serial.println(B_volt);
 }
 
-void loop() {
-
-   while(1){
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    //send_CAN();
-    reset_watchdog();
-    //RX_CAN();
-    //writeDataToSD();
-    delay(1000);  
-  }
-
-  //delay(3000);
-  //initialize_ADC();
-  while(1){
-    dumpDataToSerial();
-  }
-  if(mode == "charge"){
-    RX_CAN();
-    send_CAN(true);
-    delay(500);
-  }
-
-  if(mode == "drive"){
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    //send_CAN();
-    reset_watchdog();
-    //RX_CAN();
-    // writeDataToSD();
-    delay(1000);  
-  }
-
-  if(mode == "debug"){
-
-
-  }
-
-  while(1){
-    send_CAN(false);
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    if(reset_watchdog()){
-      //balance(false);
-    }
-    delay(1000);
-      //balance(false);
-    send_CAN(true);
-    delay(2000);  }
-
-  digitalWrite(20, LOW);
-  measure_voltage();
-  measure_temp();
-  sense_status();
-  
-
-  //begin measurments
-  //curr_meas.begin(measure_current, 1000);
-  //volt_meas.begin(measure_voltage,1000000);
-  
-  while(1){
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    //send_CAN();
-    reset_watchdog();
-    //RX_CAN();
-    //writeDataToSD();
-    delay(1000);  
-  }
-
-}
 
 void print_min_max(float* max_voltage){   //This function prints the min and max parameters
   float min_cell_voltage = cell_voltage[0][0];
@@ -682,15 +722,17 @@ void measure_voltage(){
     }
   }
 
-  Serial.println("Voltages:");
-  int g = 0;
-  for(int i=0; i<num_boards; i++){
-    Serial.print("board: "); Serial.println(i+1);
-    for(int j=0; j<num_cells; j++){
-       Serial.println(cell_voltage[i][j]);   
-       g++; 
+  if(debug){
+    Serial.println("Voltages:");
+    int g = 0;
+    for(int i=0; i<num_boards; i++){
+      Serial.print("board: "); Serial.println(i+1);
+      for(int j=0; j<num_cells; j++){
+        Serial.println(cell_voltage[i][j]);   
+        g++; 
+      }
+      Serial.println('\n');
     }
-    Serial.println('\n');
   }
   
 }
@@ -698,11 +740,14 @@ void measure_voltage(){
 float map_temp(float V){
   int i;
   int size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
-  float R_bias = 10200;
+  float R_bias = 10000;
   float V_ref = 3.00;
+  float min_temp_range = -55;
+  float max_temp_range = 150;
+
 
   if(V_ref == V){   //divide by zero case
-    return -40;
+    return -55;
   }
 
   float NTC_res = (V/V_ref*R_bias)/(1-V/V_ref);
@@ -719,12 +764,12 @@ float map_temp(float V){
       break;
     }
   }
-  float temperature = float(i)/float(size)*(150+40)-40;
+  float temperature = float(i)/float(size)*(max_temp_range+min_temp_range)-min_temp_range;
   return(temperature);
 }
 
 void measure_temp(bool open_wire_check){
-  //volt_meas.end();
+
   uint8_t response[num_boards][6];
   uint16_t aux_comm[4] = {RDAUXA, RDAUXB, RDAUXC, RDAUXD};   //read aux registers A through D commands
   int temp_num = 0;       //temperature reading index 0-8
@@ -753,23 +798,25 @@ void measure_temp(bool open_wire_check){
   command_num++;
   }
 
-  Serial.println("Tempearatures:");
   for(int i=0; i<num_boards; i++){
-    Serial.print("board: "); Serial.println(i+1);
     for(int j=0; j<9; j++){
-        //Serial.println(cell_temp[i][j]);   
-        Serial.println(map_temp(cell_temp[i][j]));
         cell_temp[i][j] = map_temp(cell_temp[i][j]);
     }
-    Serial.println('\n');
   }
 
-
+  if(debug){
+    Serial.println("Tempearatures:");
+    for(int i=0; i<num_boards; i++){
+      Serial.print("board: "); Serial.println(i+1);
+      for(int j=0; j<9; j++){
+        Serial.print(cell_temp[i][j]);
+      }
+      Serial.println('\n');
+    }
+  }
 }
 
 bool reset_watchdog(){
-  int num_temp_masked[num_boards] = {0};    //number of open wire (temp = 150) thermistors per board to be masked
-  int mask_threshold = 3;                       //number of allowable open temperature sensor faults to be masked
 
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< num_cells; j++){
@@ -786,16 +833,7 @@ bool reset_watchdog(){
   }
 
   for(int i = 0; i < num_boards; i++){
-    for(int j = 0; j< 9; j++){          //9th temp sensor wired incorrectly
-      if(cell_temp[i][j] == 150 || cell_temp[i][j] == -40){   //mask open wire faults
-        num_temp_masked[i] += 1;
-        if(num_temp_masked[i] >= 3){
-          digitalWrite(20, LOW);
-          Serial.print("Board "); Serial.print(i+1); Serial.print("Lost "); Serial.print(mask_threshold); Serial.println(" Sensors");
-          return false;
-        }
-        continue;
-      }
+    for(int j = 0; j < 9; j++){
       if(cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp){   //board 8 temp sensor 8 open
         continue;
       }
@@ -842,7 +880,8 @@ void measure_current(){
   currentCount1++;
 }
 
-void send_CAN(bool enable){
+
+void charger_enable(bool enable){
   digitalWrite(STBY, LOW);
   digitalWrite(CTX3, HIGH);
   delay(1);
@@ -871,27 +910,77 @@ void send_CAN(bool enable){
   }
 }
 
-void RX_CAN(){
+void TX_CAN(){
+  float min_cell_voltage = cell_voltage[0][0];
+  float max_cell_voltage = cell_voltage[0][0];
+  float min_cell_temp = cell_temp[0][0];
+  float max_cell_temp = cell_temp[0][0];
+  min_max<num_boards,num_cells>(cell_voltage, &min_cell_voltage, &max_cell_voltage);
+  min_max<num_boards,9>(cell_temp, &min_cell_temp, &max_cell_temp);
+
   digitalWrite(STBY, LOW);
   digitalWrite(CTX3, HIGH);
+  delay(1);
+  digitalWrite(CTX3, LOW);
+  CAN_message_t BMS_data;
+  BMS_data.id = BMS_ID;
+  BMS_data.flags.extended = 0; 
+  BMS_data.len = 8;     // Set the data length
 
-  CAN_message_t msg;
-  bool received = false;
-  while (received == false) {
-    can.read(msg);
-    if(msg.id != 0){
-      Serial.print("ID: ");
-      Serial.print(msg.id, HEX);
-      Serial.println(" Data: ");
-      msg.len = 16;
-      for (int i = 0; i < msg.len; i++) {
-        Serial.print(msg.buf[i], BIN);
-        Serial.print(" ");
-      }
-      Serial.print('\n');
-    }
-    received = true;
+  BMS_data.buf[0] = float_2_uint8_t(soc, 0, 100);               //SOC
+  BMS_data.buf[1] = float_2_uint8_t(12, 0, 12);                 //current
+  BMS_data.buf[2] = float_2_uint8_t(max_cell_voltage, 0, 5);    //max cell
+  BMS_data.buf[3] = float_2_uint8_t(min_cell_temp, 0, 150);
+  BMS_data.buf[4] = 0;
+  BMS_data.buf[5] = 0;
+  BMS_data.buf[6] = 0;
+  BMS_data.buf[7] = 0;
+
+  if(can.write(BMS_data)){
+    Serial.println("CAN message sent");
   }
+  else{
+    Serial.println("CAN message TX Failed");
+  }
+
+}
+
+uint8_t float_2_uint8_t(float float_val, float min, float max){   //float to uint8_t, clips values under/over min or max
+  if(max == min) {return(0);}   //divide by zero risk
+  if(float_val >= max){         //overflow risk
+    return max;
+  }
+  if(float_val <= min){         //overflow risk
+    return min;
+  }
+  uint8_t scaled = (uint8_t)(((float_val - min) / (max - min)) * 255.0);    //float decoded = ((float)scaled / 255.0) * (max - min) + min;
+  return(scaled);
+}
+
+CAN_message_t RX_CAN(){     //grabs the first message in the FIFO. 
+  // Stop mailbox interrupts (pauses reception).
+  //can.disableMBInterrupts();
+
+  digitalWrite(STBY, LOW);
+  digitalWrite(CTX3, HIGH);
+  CAN_message_t msg = {};
+  bool recieved = false;
+  recieved = can.read(msg);
+  if(recieved){
+    Serial.print("ID: ");
+    Serial.print(msg.id, HEX);
+    Serial.println(" Data: ");
+    msg.len = 16;
+    for (int i = 0; i < msg.len; i++) {
+      Serial.print(msg.buf[i], BIN);
+      Serial.print(" ");
+    }
+    Serial.print('\n');
+  }
+  
+  // Re-enable reception
+  //can.enableMBInterrupts();
+  return msg;   //always check the ID of the returned message
 }
 
 void configure_sense(){     
@@ -1097,3 +1186,394 @@ void wakeup_idle(uint8_t total_ic){ //Number of ICs in the system
   digitalWrite(CS, HIGH);
 	}
 }
+
+
+// void LTC681x_adow(uint8_t MD, //ADC Mode
+// 				  uint8_t PUP,//Pull up/Pull down current
+// 				  uint8_t CH, //Channels
+// 				  uint8_t DCP//Discharge Permit
+// 				 )
+// {
+// 	uint8_t cmd[2];
+// 	uint8_t md_bits;
+	
+// 	md_bits = (MD & 0x02) >> 1;
+// 	cmd[0] = md_bits + 0x02;
+// 	md_bits = (MD & 0x01) << 7;
+// 	cmd[1] =  md_bits + 0x28 + (PUP<<6) + CH+(DCP<<4);
+	
+// 	cmd_68(cmd);
+// }
+
+// /* Start GPIOs open wire ADC conversion */
+// void LTC681x_axow(uint8_t MD, //ADC Mode
+// 				  uint8_t PUP //Pull up/Pull down current
+// 				 )
+// {
+// 	uint8_t cmd[2];
+// 	uint8_t md_bits;
+	
+// 	md_bits = (MD & 0x02) >> 1;
+// 	cmd[0] = md_bits + 0x04;
+// 	md_bits = (MD & 0x01) << 7;
+// 	cmd[1] =  md_bits + 0x10+ (PUP<<6) ;//+ CH;
+	
+// 	cmd_68(cmd);
+// }
+
+// /* Runs the data sheet algorithm for open wire for single cell detection */
+// void LTC681x_run_openwire_single(uint8_t total_ic, // Number of ICs in the daisy chain
+// 								cell_asic ic[] // A two dimensional array that will store the data
+// 								)
+// {				  
+// 	uint16_t OPENWIRE_THRESHOLD = 4000;
+// 	const uint8_t  N_CHANNELS = ic[0].ic_reg.cell_channels;
+	
+// 	uint16_t pullUp[total_ic][N_CHANNELS];
+// 	uint16_t pullDwn[total_ic][N_CHANNELS];
+// 	int16_t openWire_delta[total_ic][N_CHANNELS];
+	
+// 	int8_t error;
+// 	int8_t i;
+// 	uint32_t conv_time=0;
+
+// 	wakeup_sleep(total_ic);
+// 	LTC681x_clrcell();
+	
+// 	// Pull Ups
+// 	for (i = 0; i < 3; i++)
+// 	{ 
+// 	  wakeup_idle(total_ic);
+// 	  LTC681x_adow(MD_26HZ_2KHZ,PULL_UP_CURRENT,CELL_CH_ALL,DCP_DISABLED);
+// 	  conv_time =LTC681x_pollAdc();
+// 	} 
+	
+// 	wakeup_idle(total_ic);
+// 	error=LTC681x_rdcv(0, total_ic,ic);
+	
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{
+// 	    for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{
+// 		  pullUp[cic][cell] = ic[cic].cells.c_codes[cell];
+// 		}	
+// 	}
+
+// 	// Pull Downs
+// 	for (i = 0; i < 3; i++)
+// 	{  
+// 	  wakeup_idle(total_ic);
+// 	  LTC681x_adow(MD_26HZ_2KHZ,PULL_DOWN_CURRENT,CELL_CH_ALL,DCP_DISABLED);
+// 	  conv_time =LTC681x_pollAdc();
+// 	}
+	
+// 	wakeup_idle(total_ic);
+// 	error=LTC681x_rdcv(0, total_ic,ic); 
+	
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{		  
+// 	    for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{
+// 		   pullDwn[cic][cell] = ic[cic].cells.c_codes[cell];
+// 		}
+// 	}
+
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{
+// 	  ic[cic].system_open_wire = 0xFFFF;
+	  
+// 		for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{
+// 			if (pullDwn[cic][cell] < pullUp[cic][cell])                   
+// 			{
+// 				openWire_delta[cic][cell] = (pullUp[cic][cell] - pullDwn[cic][cell]);
+// 			}
+// 			else
+// 			{
+// 				openWire_delta[cic][cell] = 0;                                             
+// 			}  
+				
+// 			if (openWire_delta[cic][cell]>OPENWIRE_THRESHOLD)
+// 			{
+// 				ic[cic].system_open_wire = cell+1;
+// 			}
+// 		}
+		
+// 		if (pullUp[cic][0] == 0)
+// 		{
+// 		  ic[cic].system_open_wire = 0;
+// 		}
+		
+// 		if (pullUp[cic][(N_CHANNELS-1)] == 0)//checking the Pull up value of the top measured channel
+// 		{
+// 		  ic[cic].system_open_wire = N_CHANNELS;
+// 		}	
+// 	}
+// }
+
+// /* Runs the data sheet algorithm for open wire for multiple cell and two consecutive cells detection */
+//  void LTC681x_run_openwire_multi(uint8_t total_ic, // Number of ICs in the daisy chain
+// 						  cell_asic ic[] // A two dimensional array that will store the data
+// 						  )
+// {              
+// 	uint16_t OPENWIRE_THRESHOLD = 4000;
+// 	const uint8_t  N_CHANNELS = ic[0].ic_reg.cell_channels;
+
+// 	uint16_t pullUp[total_ic][N_CHANNELS];
+// 	uint16_t pullDwn[total_ic][N_CHANNELS];
+// 	uint16_t openWire_delta[total_ic][N_CHANNELS];
+
+// 	int8_t error;
+// 	int8_t opencells[N_CHANNELS];
+// 	int8_t n=0;
+// 	int8_t i,j,k;
+// 	uint32_t conv_time=0;
+
+// 	wakeup_sleep(total_ic);
+// 	LTC681x_clrcell();
+
+// 	// Pull Ups
+// 	for (i = 0; i < 5; i++)
+// 	{ 
+// 		wakeup_idle(total_ic);
+// 		LTC681x_adow(MD_26HZ_2KHZ,PULL_UP_CURRENT,CELL_CH_ALL,DCP_DISABLED);
+// 		conv_time =LTC681x_pollAdc();
+// 	} 
+
+// 	wakeup_idle(total_ic);
+// 	error = LTC681x_rdcv(0, total_ic,ic);
+
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{
+// 	    for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{
+// 		  pullUp[cic][cell] = ic[cic].cells.c_codes[cell];
+// 		}
+// 	}
+
+// 	// Pull Downs
+// 	for (i = 0; i < 5; i++)
+// 	{  
+// 	  wakeup_idle(total_ic);
+// 	  LTC681x_adow(MD_26HZ_2KHZ,PULL_DOWN_CURRENT,CELL_CH_ALL,DCP_DISABLED);
+// 	  conv_time =   LTC681x_pollAdc();
+// 	}
+
+// 	wakeup_idle(total_ic);
+// 	error = LTC681x_rdcv(0, total_ic,ic); 
+
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{
+// 		for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{
+// 		   pullDwn[cic][cell] = ic[cic].cells.c_codes[cell];
+// 		}
+// 	}
+
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{			  
+// 		for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{
+// 			if (pullDwn[cic][cell] < pullUp[cic][cell])                   
+// 				{
+// 					openWire_delta[cic][cell] = (pullUp[cic][cell] - pullDwn[cic][cell]);
+// 				}
+// 				else
+// 				{
+// 					openWire_delta[cic][cell] = 0;                                             
+// 				}
+// 		}  
+// 	}
+
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{ 
+// 		n=0;
+						
+// 		Serial.print("IC:");
+// 		Serial.println(cic+1, DEC);
+		
+// 		for (int cell=0; cell<N_CHANNELS; cell++)
+// 		{  
+		 
+// 		  if (openWire_delta[cic][cell]>OPENWIRE_THRESHOLD)
+// 			{
+// 				opencells[n] = cell+1;
+// 				n++;
+// 				for (int j = cell; j < N_CHANNELS-3 ; j++)                       
+// 				{
+// 					if (pullUp[cic][j + 2] == 0)
+// 					{
+// 					opencells[n] = j+2;
+// 					n++;
+// 					}
+// 				}
+// 				if((cell==N_CHANNELS-4) && (pullDwn[cic][N_CHANNELS-3] == 0))
+// 				{
+// 					  opencells[n] = N_CHANNELS-2;
+// 					  n++;
+// 				}
+// 			}
+// 		}
+// 		if (pullDwn[cic][0] == 0)
+// 		{
+// 		  opencells[n] = 0;
+// 		  Serial.println("Cell 0 is Open and multiple open wires maybe possible.");
+// 		  n++;
+// 		}
+					
+// 		if (pullDwn[cic][N_CHANNELS-1] == 0)
+// 		{
+// 		  opencells[n] = N_CHANNELS;
+// 		  n++;
+// 		}
+					
+// 		if (pullDwn[cic][N_CHANNELS-2] == 0)
+// 		{  
+// 		  opencells[n] = N_CHANNELS-1;
+// 		  n++;
+// 		}
+		
+// 	//Removing repetitive elements
+// 		for(i=0;i<n;i++)
+// 		{
+// 			for(j=i+1;j<n;)
+// 			{
+// 				if(opencells[i]==opencells[j])
+// 				{
+// 					for(k=j;k<n;k++)
+// 						opencells[k]=opencells[k+1];
+						
+// 					n--;
+// 				}
+// 				else
+// 					j++;
+// 			}
+// 		}
+					
+// 	// Sorting open cell array
+// 		for(int i=0; i<n; i++)
+// 		{
+// 			for(int j=0; j<n-1; j++)
+// 			{
+// 				if( opencells[j] > opencells[j+1] )
+// 				{
+// 					k = opencells[j];
+// 					opencells[j] = opencells[j+1];
+// 					opencells[j+1] = k;
+// 				}
+// 			}
+// 		}
+					
+// 	//Checking the value of n				
+// 		Serial.println("Number of Open wires:");
+// 		Serial.println(n);
+		   
+// 	//Printing open cell array
+// 		Serial.println("OPEN CELLS:");
+// 		if(n==0)
+// 		{
+// 			Serial.println("No Open wires");
+// 		}
+// 		else
+// 		{				
+// 			for(i=0;i<n;i++)
+// 			{
+// 					Serial.println(opencells[i]);	
+// 			}
+// 		}
+// 	}
+// 	Serial.println("\n");
+// }
+
+// /* Runs open wire for GPIOs */
+// void LTC681x_run_gpio_openwire(uint8_t total_ic, // Number of ICs in the daisy chain
+// 								cell_asic ic[] // A two dimensional array that will store the data
+// 								)
+//  {				  
+// 	uint16_t OPENWIRE_THRESHOLD = 150;
+// 	const uint8_t  N_CHANNELS = ic[0].ic_reg.aux_channels +1;
+	
+// 	uint16_t aux_val[total_ic][N_CHANNELS];
+// 	uint16_t pDwn[total_ic][N_CHANNELS];
+// 	uint16_t ow_delta[total_ic][N_CHANNELS];
+	
+// 	int8_t error;
+// 	int8_t i;
+// 	uint32_t conv_time=0;
+
+// 	wakeup_sleep(total_ic); 
+// 	LTC681x_clraux();
+	 
+// 	for (i = 0; i < 3; i++)
+// 	{ 
+// 	   wakeup_idle(total_ic);
+// 	   LTC681x_adax(MD_7KHZ_3KHZ, AUX_CH_ALL);
+// 	   conv_time= LTC681x_pollAdc();
+// 	}
+	
+// 	wakeup_idle(total_ic);
+// 	error = LTC681x_rdaux(0, total_ic,ic);
+	
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{
+// 	    for (int channel=0; channel<N_CHANNELS; channel++)
+// 		{
+// 			aux_val[cic][channel]=ic[cic].aux.a_codes[channel];
+// 		}
+// 	}	
+// 	LTC681x_clraux();
+	
+// 	// pull downs
+// 	for (i = 0; i < 3; i++)
+// 	{ 
+// 	   wakeup_idle(total_ic);
+// 	   LTC681x_axow(MD_7KHZ_3KHZ,PULL_DOWN_CURRENT);
+// 	   conv_time =LTC681x_pollAdc();
+// 	} 
+	
+// 	wakeup_idle(total_ic);
+// 	error = LTC681x_rdaux(0, total_ic,ic);
+	
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{
+// 	   for (int channel=0; channel<N_CHANNELS; channel++)
+// 		{
+// 			pDwn[cic][channel]=ic[cic].aux.a_codes[channel] ;
+// 		}
+// 	}
+	
+// 	for (int cic=0; cic<total_ic; cic++)
+// 	{  
+// 		ic[cic].system_open_wire = 0xFFFF;
+		
+// 		for (int channel=0; channel<N_CHANNELS; channel++)
+// 		{
+// 			if (pDwn[cic][channel] > aux_val[cic][channel])                   
+// 			{
+// 				ow_delta[cic][channel] = (pDwn[cic][channel] - aux_val[cic][channel]);
+// 			}
+// 			else
+// 			{
+// 				ow_delta[cic][channel] = 0;                                             
+// 			} 
+			
+// 			if(channel<5)
+// 			{
+// 				if (ow_delta[cic][channel] > OPENWIRE_THRESHOLD) 
+// 				{
+// 					ic[cic].system_open_wire= channel+1;
+					
+// 				}  
+// 			}
+// 			else if(channel>5)
+// 			{
+// 				if (ow_delta[cic][channel] > OPENWIRE_THRESHOLD) 
+// 				{
+// 					ic[cic].system_open_wire= channel;
+					
+// 				}  
+// 			}	
+// 		}
+// 	}	  
+// }
+

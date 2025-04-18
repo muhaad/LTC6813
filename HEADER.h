@@ -21,3 +21,4 @@ template <size_t rows, size_t cols> inline void min_max(float arr_2D[rows][cols]
 }
 
 #endif
+
