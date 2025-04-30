@@ -1,3 +1,5 @@
+wakeup_sleep function delays need to be figured out. The Analog Device code works but the delays it uses are too small to wake all the boards.
+
 add warnings
 Use Binary Search to map NTC resistance value to temperature
 Add 200A current sensing (this is a hardware issue)

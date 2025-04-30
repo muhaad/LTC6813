@@ -35,7 +35,7 @@ bool memory_fault = 0;
 bool comms_fault = 0;
 bool watchdog_callback = 0;
 bool watchdog_reset = 0;
-bool debug = 0;
+bool debug = 1;
 
 unsigned int start_time = 0;
 
@@ -115,20 +115,21 @@ void setup() {
   //can.setMaxMB(NUM_RX_MAILBOXES);
   //FLEXCAN_MAILBOX INV_filter;
   //FLEXCAN_MAILBOX CHG_filter;
-  can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
-  can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
 
-  can.setMBFilter(MB0, INV_TX_ID);  //Mailbox for Inverter CAN messages
-  can.setMBFilter(MB1, CHG_TX_ID);  //Mailbox for Charger CAN Messages
+  //can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
+  //can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
+
+  //can.setMBFilter(MB0, INV_TX_ID);  //Mailbox for Inverter CAN messages
+  //can.setMBFilter(MB1, CHG_TX_ID);  //Mailbox for Charger CAN Messages
 
   //Watchdog
-  if(watchdog_timeout){
+  if(watchdog_timeout != 0){
     WDT_timings_t config;
     config.trigger = max(1,  watchdog_timeout - 1);   /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
     config.timeout = watchdog_timeout;               /* in seconds, 0->128 */   //time until watchdog reset
     config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
     config.callback = myCallback;
-    wdt.begin(config);
+    wdt.begin(config);              //This needs moved to the main loop
   }
 
   //current offset compensation
@@ -145,10 +146,14 @@ void setup() {
   //get_SOC();
   //check_memory();
 
+  while(1){
+    RX_CAN();
+  }
+
   if(mode == ""){
-    int curr_time = millis();
+    int curr_time = 0;
     CAN_message_t msg;
-    while(curr_time < start_time + 5000){     //Enters Debug Mode after 5 Seconds if no CAN message from Inverter or Charger is detected
+    while(curr_time < start_time + 15000000000){     //Enters Debug Mode after 5 Seconds if no CAN message from Inverter or Charger is detected
       msg = RX_CAN();
       if(msg.id == INV_TX_ID){    //check ID rather than mailbox number. Mailbox Behavior not clearly defined
         mode = "standy";
@@ -160,6 +165,7 @@ void setup() {
         //can.setMBFilter(MB0, 0);  //Disable Inverter Mailbox
         break;
       }
+    curr_time = millis();
   
       // if(mode == "charge" || "standby"){                 //example of flushing 2 CAN mailboxes. Dont need this code because inverter and charger don't use can bus at the same time. 
       //   // Stop mailbox interrupts (pauses reception)
@@ -177,25 +183,28 @@ void setup() {
 }
 
 void loop() {
-   while(1){
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    //charger_enable();
-    reset_watchdog();
-    //RX_CAN();
-    //writeDataToSD();
-    delay(1000);  
-  }
+  //  while(1){
+  //   Serial.println("Main Loop");
+  //   measure_voltage();
+  //   measure_temp();
+  //   measure_current();
+  //   //charger_enable();
+  //   reset_watchdog();
+  //   //RX_CAN();
+  //   //writeDataToSD();
+  //   delay(1000);  
+  // }
   //delay(3000);
   //initialize_ADC();
   if(mode == "charge"){
+    while(1){
     Serial.println("Charge Mode Entered");
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    reset_watchdog();
-    charger_enable(true);
+    }
+    //measure_voltage();
+    //measure_temp();
+    //measure_current();
+    //reset_watchdog();
+    //charger_enable(true);
     delay(500);
   }
 
@@ -582,7 +591,7 @@ void send_command(uint16_t command){
   cmd0 = command >> 8;
   cmd1 = command >> 0;
 
-  wakeup_sleep(num_boards);
+  wakeup_sleep(num_boards + 1);
 
   //delay(2);          
   digitalWrite(CS, LOW);
@@ -686,13 +695,14 @@ void poll_ADC(uint16_t command){
   send_command(command);
 
   int num_polls = 0;
-  while (return_data == 0) {
+  while (return_data == 0) {                                                      //This needs a timeout condition
     return_data = SPI.transfer(0b11111111); // Send dummy byte to receive data
     num_polls++;
   }
   // interrupts();
-  //Serial.println("ADC Conversion Done!");
-  //Serial.println(num_polls);
+
+  // Serial.println("ADC Conversion Done!");
+  // Serial.println(num_polls);
   digitalWrite(CS, HIGH);
 }
 
@@ -1140,7 +1150,8 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
   write_register_group(WRCFGB, data_arr);
 }
 
-void myCallback() {       
+void myCallback() {    
+  //Serial.println("Callback Called");   
   measure_voltage();
   reset_watchdog();
 }
@@ -1148,14 +1159,14 @@ void myCallback() {
 
 //Analog Devices provided Functions
 
-void wakeup_sleep(uint8_t total_ic) //Number of ICs in the system
+void wakeup_sleep(uint8_t total_ic) //Number of ICs in the system. This function needs some work
 {
 	for (int i =0; i<total_ic; i++)
 	{
 	   digitalWrite(CS, LOW);
-	   delay(0.300); // Guarantees the LTC681x will be in standby
+	   delay(3); // Guarantees the LTC681x will be in standby
 	   digitalWrite(CS, HIGH);
-	   delay(0.010);
+	   delay(1);
 	}
 }
 

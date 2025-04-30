@@ -10,7 +10,7 @@ const float max_temp = 60;
 const float min_temp = 0;
 const float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
 const float UV = 2.8;       //under-voltage limit (V)
-const int watchdog_timeout = 5;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
+const int watchdog_timeout = 0;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
 
 //architecture
 const int num_boards = 4;
