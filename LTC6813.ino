@@ -57,6 +57,9 @@ float gCurrent = 0;   //global variable to hold current current.
 //state of charge
 float soc = 0.0;
 
+// data.csv enumeration
+int data_file_num = 0;
+
 //LTC6813 minimum supply voltage is 16V
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
 float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
@@ -108,15 +111,20 @@ void setup() {
   pinMode(STBY, OUTPUT);
   can.begin();
   can.setBaudRate(250000);
-  can.setMaxMB(2);        //number of CAN message mailboxes
+  can.setMaxMB(3);        //number of CAN message mailboxes
   digitalWrite(STBY, LOW);
 
   //    https://github.com/tonton81/FlexCAN_T4/blob/master/examples/mailbox_filtering_example_with_interrupts/mailbox_filtering_example_with_interrupts.ino
+  // Mailboxes must be configured for all messages - both TX and RX
   can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
   can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
+  can.setMB((FLEXCAN_MAILBOX)2,TX,EXT);   //BMS TX -> charger id
+
 
   can.setMBFilter(MB0, INV_TX_ID);  //Mailbox for Inverter CAN messages
   can.setMBFilter(MB1, CHG_TX_ID);  //Mailbox for Charger CAN Messages
+  can.setMBFilter(MB2, 0x1806E5F4);  //Mailbox for Charger CAN Messages
+
 
   //Watchdog
   if(watchdog_timeout != 0){
@@ -138,7 +146,10 @@ void setup() {
   //Bring up ADC
   //initialize_ADC();
 
-  //check_memory();
+
+ 
+  check_memory();
+  
   //get_SOC();
   //check_memory();
   
@@ -151,10 +162,13 @@ void setup() {
   //   delay(20);
   // }
 
+
   if(mode == ""){
     CAN_message_t msg;
     while(1){
       msg = RX_CAN();
+      String input = Serial.readStringUntil('\n');
+      input.trim();
       if(msg.id == INV_TX_ID){    //Always check msg id
         mode = "standy";
         //can.setMBFilter(MB1, 0);  //Disable Charger Mailbox
@@ -163,6 +177,10 @@ void setup() {
       else if(msg.id == CHG_TX_ID){
         mode = "charge";
         //can.setMBFilter(MB0, 0);  //Disable Inverter Mailbox
+        break;
+      }
+      else if(input == "debug"){
+        mode = "debug";
         break;
       }
   
@@ -182,30 +200,55 @@ void setup() {
 }
 
 void loop() {
-  //  while(1){
-  //   Serial.println("Main Loop");
-  //   measure_voltage();
-  //   measure_temp();
-  //   measure_current();
-  //   //charger_enable();
-  //   reset_watchdog();
-  //   //RX_CAN();
-  //   //writeDataToSD();
-  //   delay(1000);  
-  // }
-  //delay(3000);
-  //initialize_ADC();
   if(mode == "charge"){
-    while(1){
     Serial.println("Charge Mode Entered");      //if charger hardware fault exit charge mode
-    delay(500);
+
+    CAN_message_t msg;
+    String filename = "data" + String(data_file_num) + ".csv";
+    File file = SD.open(filename.c_str(), FILE_WRITE);
+    file.close();
+
+    delay(6000);  //cause comm fault on charger. Power cycling the BMS without ensuring the charger fully powers down would otherwise can cause the BMS to enter the charge cycle agian
+
+    //clear comm fault on charger
+    while(1){
+      charger_enable(true);                 //send turn-off message and clear comm fault on charger
+      msg = RX_CAN();
+      if(msg.id == CHG_TX_ID && msg.buf[4] == 0){
+        break;   
+      }
     }
-    //measure_voltage();
-    //measure_temp();
-    //measure_current();
-    //reset_watchdog();
-    //charger_enable(true);
-    delay(500);
+    //00100 low ac power on charger flag
+    delay(1000);    //delay so that another Charger CAN message is sent to the BMS
+
+    //enter charge cycle
+    while(1){
+      measure_voltage();
+      measure_temp();
+      measure_current();
+      if(reset_watchdog()){
+        msg = RX_CAN();
+        if(true || msg.id == CHG_TX_ID && msg.buf[4] == 0){
+          charger_enable(false);   
+        }
+        else{
+          digitalWrite(20, LOW);
+          charger_enable(true);
+          break;
+        }
+      }
+      if(!memory_fault){
+        SD_data_write(filename);
+      }
+      delay(2000);
+    }
+
+    //charger_falut
+    while(1){
+      Serial.println("Charger Fault");
+      delay(1000);
+    }
+   
   }
 
   if(mode == "standby"){                  //waiting to drive
@@ -226,38 +269,12 @@ void loop() {
 
   if(mode == "debug"){
     Serial.println("Debug Mode Entered");
-  }
-
-
-  while(1){
-    charger_enable(false);
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    if(reset_watchdog()){
-      //balance(false);
+    while(1){
+      
     }
-    delay(1000);
-      //balance(false);
-    charger_enable(true);
-    delay(2000);  }
-
-  digitalWrite(20, LOW);
-  measure_voltage();
-  measure_temp();
-  sense_status();
-  
-  while(1){
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    //charger_enable();
-    reset_watchdog();
-    //RX_CAN();
-    //writeDataToSD();
-    delay(1000);  
   }
-
+ 
+  
 }
 
 void initialize_ADC(){
@@ -366,7 +383,7 @@ void dumpDataToSerial() {
   while(1){
     String input = Serial.readStringUntil('\n');
     input.trim();
-    if(input == "hello from python"){
+    if(input == "debug"){
       break;
     }
   }
@@ -377,6 +394,7 @@ void dumpDataToSerial() {
   }
 
   // Open the CSV file for reading
+
   File dataFile = SD.open("data.csv");
   
   if (dataFile) {
@@ -386,8 +404,7 @@ void dumpDataToSerial() {
     }
     dataFile.close();
     Serial.println("serial dump done");
-    // Delete the file after sending its contents
-    //SD.remove("data.csv");
+
   } 
   else {
     Serial.println("Error opening data.csv for reading");
@@ -400,21 +417,60 @@ void check_memory(){    //this should check all files
     memory_fault = 1;
     return;
   }
-  if(SD.exists("state.txt")){
-    File dataFile = SD.open("data.csv");
-    unsigned long fileSize = dataFile.size();   //file size in bytes
-    Serial.println(fileSize);
-    memory = fileSize / pow(10,6);
-    Serial.println(memory);
-    if(memory > 0.9*SD_card_size){
-      Serial.println("SD card over 90% full");
-      memory_fault = 1;
+
+  if(!SD.exists("state.txt")) {
+    File file = SD.open("state.txt", FILE_WRITE);
+    file.close();
+  }
+
+  File root = SD.open("/");
+  File entry = root.openNextFile();
+  uint64_t memory_usage = 0;
+  int num_files = 0;
+  while (entry) {
+    num_files++;
+    Serial.print(entry.name());
+    Serial.print("\t");
+    Serial.print(entry.size());
+    Serial.println(" bytes");
+
+    memory_usage += entry.size();
+    entry.close();
+    //SD.remove(entry.name());
+    entry = root.openNextFile();
+  }
+  root.close();
+
+  if(memory > 0.9*SD_card_size){
+    Serial.println("SD card over 90% full");
+    memory_fault = 1;
+    return;
+  }
+
+  for(int i = 0; i < num_files + 3; i++){
+    String filename = "data" + String(i) + ".csv";
+    if(!SD.exists(filename.c_str())){
+      data_file_num = i;
+      break;
     }
   }
-  else{
-    Serial.println("data.csv not found");
-    memory_fault = 1;
-  }
+
+  // if(SD.exists("state.txt")){
+  //   File dataFile = SD.open("data.csv");
+  //   unsigned long fileSize = dataFile.size();   //file size in bytes
+  //   Serial.println(fileSize);
+  //   memory = fileSize / pow(10,6);
+  //   Serial.println(memory);
+  //   if(memory > 0.9*SD_card_size){
+  //     Serial.println("SD card over 90% full");
+  //     memory_fault = 1;
+  //   }
+  // }
+
+  // else{
+  //   Serial.println("data.csv not found");
+  //   memory_fault = 1;
+  // }
 }
 
 // Function to extract the charge value from a line
@@ -485,8 +541,9 @@ void update_soc(float curr_sample, String time){
   }
 }
 
-void writeDataToSD() {
-  File dataFile = SD.open("data.csv", FILE_WRITE);
+void SD_data_write(String filename) {
+  File dataFile = SD.open(filename.c_str(), FILE_WRITE);
+  // error checking goes here
   if (dataFile) {
     dataFile.print("Voltage:\n");
     //write voltage data
@@ -511,7 +568,6 @@ void writeDataToSD() {
     }
     //Current Measurement
     dataFile.print("\nCurrent: ");
-    float current = avgCurrent();
     dataFile.print(current);
 
     float curr_time_ms = millis()-start_time;
@@ -536,10 +592,11 @@ void writeDataToSD() {
     Serial.print("Time: ");
     Serial.println(time_string);
     //write to soc.txt
-    update_soc(current, time_string);
-    Serial.println("Data written to SD card");
+    //update_soc(current, time_string);
+    //Serial.println("Data written to SD card");
   } else {
     Serial.println("Error opening data.csv for writing");
+    memory_fault = 1;
   }
 }
 
