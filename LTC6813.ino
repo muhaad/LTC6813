@@ -35,7 +35,7 @@ bool memory_fault = 0;
 bool comms_fault = 0;
 bool watchdog_callback = 0;
 bool watchdog_reset = 0;
-bool debug = 1;
+bool debug = 0;
 
 unsigned int start_time = 0;
 
@@ -116,11 +116,11 @@ void setup() {
   //FLEXCAN_MAILBOX INV_filter;
   //FLEXCAN_MAILBOX CHG_filter;
 
-  //can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
-  //can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
+  can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
+  can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
 
-  //can.setMBFilter(MB0, INV_TX_ID);  //Mailbox for Inverter CAN messages
-  //can.setMBFilter(MB1, CHG_TX_ID);  //Mailbox for Charger CAN Messages
+  can.setMBFilter(MB0, INV_TX_ID);  //Mailbox for Inverter CAN messages
+  can.setMBFilter(MB1, CHG_TX_ID);  //Mailbox for Charger CAN Messages
 
   //Watchdog
   if(watchdog_timeout != 0){
@@ -147,7 +147,13 @@ void setup() {
   //check_memory();
 
   while(1){
+    //Serial.println("Yeah it flashed!");
+    measure_voltage();
+    measure_temp();
+    reset_watchdog();
     RX_CAN();
+    charger_enable(true);
+
   }
 
   if(mode == ""){
@@ -748,13 +754,10 @@ void measure_voltage(){
 }
 
 float map_temp(float V){
-  int i;
+   int i;
   int size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
   float R_bias = 10000;
   float V_ref = 3.00;
-  float min_temp_range = -55;
-  float max_temp_range = 150;
-
 
   if(V_ref == V){   //divide by zero case
     return -55;
@@ -774,7 +777,8 @@ float map_temp(float V){
       break;
     }
   }
-  float temperature = float(i)/float(size)*(max_temp_range+min_temp_range)-min_temp_range;
+  float temperature = float(i)/float(size)*(150+55)-55;
+  //temperature = V;
   return(temperature);
 }
 
@@ -976,7 +980,7 @@ CAN_message_t RX_CAN(){     //grabs the first message in the FIFO.
   CAN_message_t msg = {};
   bool recieved = false;
   recieved = can.read(msg);
-  if(recieved){
+  if(msg.id != 0){
     Serial.print("ID: ");
     Serial.print(msg.id, HEX);
     Serial.println(" Data: ");
