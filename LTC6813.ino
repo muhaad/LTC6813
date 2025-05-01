@@ -145,19 +145,26 @@ void setup() {
   //check_memory();
   //get_SOC();
   //check_memory();
-
+  int curr_time = 0;
+  while(curr_time < start_time + 30000){
+  measure_voltage();
+  measure_temp();
+  reset_watchdog();
+  charger_enable(false);
+  curr_time = millis();
+  }
   while(1){
     //Serial.println("Yeah it flashed!");
     measure_voltage();
     measure_temp();
     reset_watchdog();
     RX_CAN();
-    charger_enable(true);
+    charger_enable(false);
 
   }
 
   if(mode == ""){
-    int curr_time = 0;
+    curr_time = 0;
     CAN_message_t msg;
     while(curr_time < start_time + 15000000000){     //Enters Debug Mode after 5 Seconds if no CAN message from Inverter or Charger is detected
       msg = RX_CAN();
@@ -916,6 +923,15 @@ void charger_enable(bool enable){
   CHGR_EN.buf[6] = 0;
   CHGR_EN.buf[7] = 0;
 
+  CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10);
+  CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10 >> 8);
+  CHGR_EN.buf[2] = (uint8_t)(CHG_current*10);
+  CHGR_EN.buf[3] = (uint8_t)(CHG_current*10 >> 8);
+  CHGR_EN.buf[4] = (uint8_t)(enable);
+  CHGR_EN.buf[5] = 0;
+  CHGR_EN.buf[6] = 0;
+  CHGR_EN.buf[7] = 0;
+
   if(can.write(CHGR_EN)){
     Serial.println("CAN message sent");
   }
@@ -984,7 +1000,7 @@ CAN_message_t RX_CAN(){     //grabs the first message in the FIFO.
     Serial.print("ID: ");
     Serial.print(msg.id, HEX);
     Serial.println(" Data: ");
-    msg.len = 16;
+    msg.len = 8;
     for (int i = 0; i < msg.len; i++) {
       Serial.print(msg.buf[i], BIN);
       Serial.print(" ");

@@ -25,8 +25,8 @@ uint32_t INV_TX_ID = 0x0A7;         //CAN Message ID of message send from invert
 uint32_t CHG_TX_ID = 0x18FF50E5;    //CAN Message ID of messages sent from charger
 
 //charging parameters
-uint16_t CHG_voltage = 233;
-uint16_t CHG_current = 2;
+uint16_t CHG_voltage = 280;
+uint16_t CHG_current = 1;
 float _qt = 12.6 * 60; //total capacity (coulumbs): total capacity (Ah) * 60s/1hr
 
 //balancing parameters
