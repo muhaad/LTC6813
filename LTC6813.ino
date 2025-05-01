@@ -108,14 +108,10 @@ void setup() {
   pinMode(STBY, OUTPUT);
   can.begin();
   can.setBaudRate(250000);
-  can.enableFIFO();
+  can.setMaxMB(2);        //number of CAN message mailboxes
+  digitalWrite(STBY, LOW);
 
   //    https://github.com/tonton81/FlexCAN_T4/blob/master/examples/mailbox_filtering_example_with_interrupts/mailbox_filtering_example_with_interrupts.ino
-  //int NUM_RX_MAILBOXES = 2;
-  //can.setMaxMB(NUM_RX_MAILBOXES);
-  //FLEXCAN_MAILBOX INV_filter;
-  //FLEXCAN_MAILBOX CHG_filter;
-
   can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
   can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
 
@@ -145,30 +141,21 @@ void setup() {
   //check_memory();
   //get_SOC();
   //check_memory();
-  int curr_time = 0;
-  while(curr_time < start_time + 30000){
+  
   measure_voltage();
   measure_temp();
   reset_watchdog();
-  charger_enable(false);
-  curr_time = millis();
-  }
-  while(1){
-    //Serial.println("Yeah it flashed!");
-    measure_voltage();
-    measure_temp();
-    reset_watchdog();
-    RX_CAN();
-    charger_enable(false);
-
-  }
+  // while(1){
+  //   RX_CAN();
+  //   //charger_enable(true);
+  //   delay(20);
+  // }
 
   if(mode == ""){
-    curr_time = 0;
     CAN_message_t msg;
-    while(curr_time < start_time + 15000000000){     //Enters Debug Mode after 5 Seconds if no CAN message from Inverter or Charger is detected
+    while(1){
       msg = RX_CAN();
-      if(msg.id == INV_TX_ID){    //check ID rather than mailbox number. Mailbox Behavior not clearly defined
+      if(msg.id == INV_TX_ID){    //Always check msg id
         mode = "standy";
         //can.setMBFilter(MB1, 0);  //Disable Charger Mailbox
         break;
@@ -178,7 +165,6 @@ void setup() {
         //can.setMBFilter(MB0, 0);  //Disable Inverter Mailbox
         break;
       }
-    curr_time = millis();
   
       // if(mode == "charge" || "standby"){                 //example of flushing 2 CAN mailboxes. Dont need this code because inverter and charger don't use can bus at the same time. 
       //   // Stop mailbox interrupts (pauses reception)
@@ -192,7 +178,7 @@ void setup() {
 
     }
   }
-  mode = "debug";
+
 }
 
 void loop() {
@@ -211,7 +197,8 @@ void loop() {
   //initialize_ADC();
   if(mode == "charge"){
     while(1){
-    Serial.println("Charge Mode Entered");
+    Serial.println("Charge Mode Entered");      //if charger hardware fault exit charge mode
+    delay(500);
     }
     //measure_voltage();
     //measure_temp();
@@ -906,7 +893,6 @@ void charger_enable(bool enable){
   digitalWrite(STBY, LOW);
   digitalWrite(CTX3, HIGH);
   delay(1);
-  digitalWrite(CTX3, LOW);
   CAN_message_t CHGR_EN;
   //CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
   CHGR_EN.id = 0x1806E5F4;  // Set the CAN message ID     //datasheet
@@ -914,15 +900,7 @@ void charger_enable(bool enable){
   CHGR_EN.flags.extended = 1; 
   CHGR_EN.len = 8;     // Set the data length
   //7FF max CAN ID
-  CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10 >> 8);
-  CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10);
-  CHGR_EN.buf[2] = (uint8_t)(CHG_current*10 >> 8);
-  CHGR_EN.buf[3] = (uint8_t)(CHG_current*10);
-  CHGR_EN.buf[4] = (uint8_t)(enable);
-  CHGR_EN.buf[5] = 0;
-  CHGR_EN.buf[6] = 0;
-  CHGR_EN.buf[7] = 0;
-
+  
   CHGR_EN.buf[0] = (uint8_t)(CHG_voltage*10);
   CHGR_EN.buf[1] = (uint8_t)(CHG_voltage*10 >> 8);
   CHGR_EN.buf[2] = (uint8_t)(CHG_current*10);
@@ -931,11 +909,15 @@ void charger_enable(bool enable){
   CHGR_EN.buf[5] = 0;
   CHGR_EN.buf[6] = 0;
   CHGR_EN.buf[7] = 0;
+  
+  bool message_sent = can.write(CHGR_EN);
 
-  if(can.write(CHGR_EN)){
+  digitalWrite(CTX3, LOW);
+
+  if(message_sent && debug){
     Serial.println("CAN message sent");
   }
-  else{
+  else if(debug){
     Serial.println("CAN message TX Failed");
   }
 }
@@ -988,29 +970,28 @@ uint8_t float_2_uint8_t(float float_val, float min, float max){   //float to uin
 }
 
 CAN_message_t RX_CAN(){     //grabs the first message in the FIFO. 
-  // Stop mailbox interrupts (pauses reception).
-  //can.disableMBInterrupts();
+  static int curr_time = 0;
 
-  digitalWrite(STBY, LOW);
-  digitalWrite(CTX3, HIGH);
+  //left bit in charger flag is highest bit (bit 4)
   CAN_message_t msg = {};
+  digitalWrite(STBY, LOW);
   bool recieved = false;
-  recieved = can.read(msg);
+  can.read(msg);
+  //can.readMB(msg);
   if(msg.id != 0){
     Serial.print("ID: ");
     Serial.print(msg.id, HEX);
     Serial.println(" Data: ");
-    msg.len = 8;
+    //msg.len = 8;
     for (int i = 0; i < msg.len; i++) {
       Serial.print(msg.buf[i], BIN);
       Serial.print(" ");
     }
     Serial.print('\n');
+    Serial.println(millis() - curr_time);
+    curr_time = millis();
   }
-  
-  // Re-enable reception
-  //can.enableMBInterrupts();
-  return msg;   //always check the ID of the returned message
+  return msg;   //always check the ID of the returned message. No messages in buffer returns 0 ID with 8 byte of zero data
 }
 
 void configure_sense(){     
