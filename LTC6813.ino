@@ -33,13 +33,13 @@ const int chipSelect = BUILTIN_SDCARD;
 int wire_cut = 0;
 bool memory_fault = 0;
 bool comms_fault = 0;
+bool curr_sense_fault = 0;
 bool watchdog_callback = 0;
 bool watchdog_reset = 0;
 bool debug = 0;
 
 unsigned int start_time = 0;
 
-float memory = 0;
 bool CHG_EN = 0; //0: enable charging, 1: disable charging
 
 FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;      //    https://github.com/tonton81/FlexCAN_T4/tree/master
@@ -47,12 +47,11 @@ FlexCAN_T4<CAN1, RX_SIZE_256, TX_SIZE_16> can;      //    https://github.com/ton
 WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. This is desired for a shutdown circuit
 
 // // Shared variables
-float current;
+float current = 0;
 float currentSum = 0.0;
 int currentCount1 = 0;
 float averagedCurrent = 0.0;
 float current_offset = 0;
-float gCurrent = 0;   //global variable to hold current current.
 
 //state of charge
 float soc = 0.0;
@@ -60,8 +59,12 @@ float soc = 0.0;
 // data.csv enumeration
 int data_file_num = 0;
 
+//inverter voltage read fromc CAN
+float inv_voltage = 0;
+
 //LTC6813 minimum supply voltage is 16V
 float cell_voltage[num_boards][num_cells];     //most recent cell voltages
+float pack_voltage = 0;                        //sum of cell voltages. Not updated in measure_voltage()
 float cell_temp[num_boards][9];                //most recent cell temperatures. Contans raw voltage data for the duration of open wire checks
 float die_temps[num_boards];                   //most recent sense board LTC6813 die temps
 
@@ -136,34 +139,27 @@ void setup() {
     wdt.begin(config);              //This needs moved to the main loop
   }
 
-  //current offset compensation
+
+  //Bring up ADC
+  initialize_ADC();
+
+    //current offset compensation
   //measure_current();
   //current_offset = current;
 
   //Bring up references on sense boards
   //configure_sense();
 
-  //Bring up ADC
-  //initialize_ADC();
 
-
- 
   check_memory();
   
-  //get_SOC();
-  //check_memory();
+
   
-  measure_voltage();
-  measure_temp();
-  reset_watchdog();
-  // while(1){
-  //   RX_CAN();
-  //   //charger_enable(true);
-  //   delay(20);
-  // }
-
-
   if(mode == ""){
+    measure_voltage();
+    measure_temp();
+    reset_watchdog();
+    get_SOC();
     CAN_message_t msg;
     while(1){
       msg = RX_CAN();
@@ -183,43 +179,31 @@ void setup() {
         mode = "debug";
         break;
       }
-  
-      // if(mode == "charge" || "standby"){                 //example of flushing 2 CAN mailboxes. Dont need this code because inverter and charger don't use can bus at the same time. 
-      //   // Stop mailbox interrupts (pauses reception)
-      //   can.disableMBInterrupts();
-      //   for(int i = 0; i<2; i++){     //flush both mailboxes
-      //     RX_CAN();
-      //   }
-      //   can.enableMBInterrupts()     //enable reception
-      //   break;
-      // }
-
     }
   }
-
 }
 
 void loop() {
-  if(mode == "charge"){
-    Serial.println("Charge Mode Entered");      //if charger hardware fault exit charge mode
 
+  if(mode == "charge"){
+    Serial.println("Charge Mode Entered");
     CAN_message_t msg;
-    String filename = "data" + String(data_file_num) + ".csv";
+    String filename = "data" + String(data_file_num) + ".csv";        //create data file
     File file = SD.open(filename.c_str(), FILE_WRITE);
     file.close();
 
-    delay(6000);  //cause comm fault on charger. Power cycling the BMS without ensuring the charger fully powers down would otherwise can cause the BMS to enter the charge cycle agian
+    delay(6000);  //cause comm fault on charger. Power cycling the BMS without ensuring the charger fully powers down would otherwise can cause the BMS to enter the charge cycle agian.
 
     //clear comm fault on charger
     while(1){
-      charger_enable(true);                 //send turn-off message and clear comm fault on charger
+      charger_enable(true);                 //send charge-disable message and clear comm fault on charger
       msg = RX_CAN();
-      if(msg.id == CHG_TX_ID && msg.buf[4] == 0){
-        break;   
+      if(msg.id == CHG_TX_ID && msg.buf[4] == 0){   //if can id matches charger and there are no charger faults. Should actually check charger voltage to ensure that precharge is complete
+        break;        
       }
     }
     //00100 low ac power on charger flag
-    delay(1000);    //delay so that another Charger CAN message is sent to the BMS
+    delay(1000);    //delay so that another Charger CAN message is sent to the BMS (so that an empty CAN buffer is not read)
 
     //enter charge cycle
     while(1){
@@ -228,22 +212,22 @@ void loop() {
       measure_current();
       if(reset_watchdog()){
         msg = RX_CAN();
-        if(true || msg.id == CHG_TX_ID && msg.buf[4] == 0){
+        if(msg.id == CHG_TX_ID && msg.buf[4] == 0){
           charger_enable(false);   
         }
-        else{
+        else{                   //charger error
           digitalWrite(20, LOW);
           charger_enable(true);
-          break;
+          break;                //exit charger cycle
         }
       }
       if(!memory_fault){
-        SD_data_write(filename);
+        SD_data_write();
       }
       delay(2000);
     }
 
-    //charger_falut
+    //charger fault
     while(1){
       Serial.println("Charger Fault");
       delay(1000);
@@ -251,30 +235,76 @@ void loop() {
    
   }
 
-  if(mode == "standby"){                  //waiting to drive
+  if(mode == "standby"){                  //waiting to drive. Still provides rules-compliant monitering in case CAN is lost
     Serial.println("Standby Mode Entered");
+
+    if(!memory_fault){
+    String filename = "data" + String(data_file_num) + ".csv";        //create data file
+    File file = SD.open(filename.c_str(), FILE_WRITE);               
+    file.close();
+    SD_data_write();                                          //write initial conditions to data file once
+    }
+
+    while(1){
+    CAN_message_t msg;
     measure_voltage();
     measure_temp();
     measure_current();
-    //charger_enable();
     reset_watchdog();
-    //RX_CAN();
-    // writeDataToSD();
-    delay(1000);  
+    msg = RX_CAN();
+    if(msg.id == INV_TX_ID){
+      inv_voltage = float(msg.buf[0]*256 + msg.buf[1]);
+    }
+    if(inv_voltage >= pack_voltage * 0.5){    //checks inverter voltage to see if precharge is occuring
+      mode = "drive";                         //enter drive mode if precharging
+      break;
+    }
+    delay(10);  
+    }
   }
 
-  if(mode == "drive"){
-    
+  else if(mode == "drive"){
+    Serial.println("Drive Mode Entered");
+ 
+    while(1){
+    CAN_message_t msg;
+    measure_voltage();
+    measure_temp();
+    measure_current();
+    reset_watchdog();
+    if(!memory_fault){
+      SD_data_write();
+    }
+    msg = RX_CAN();
+    if(msg.id == INV_TX_ID){
+      inv_voltage = float(msg.buf[0]*256 + msg.buf[1]);
+    }
+    if(inv_voltage < pack_voltage * 0.5){    //checks inverter voltage to see if tractive system voltage is dropping
+      mode = "standby";                         //enter standby mode if ready to drive is exited
+      data_file_num = 0;
+      check_memory();         //assign a new data file number in case RTD is entered agian
+      break;
+    }
+    delay(10);
+    }
   }
 
-  if(mode == "debug"){
+  else{       //debug mode
+    digitalWrite(20, LOW);                  //open shutdown circuit in debug mode
     Serial.println("Debug Mode Entered");
     while(1){
-      
+      String input = Serial.readStringUntil('\n');
+      input.trim();
+      if(input == "dump"){
+        check_memory();               //just used to print out the file names
+        String input = Serial.readStringUntil('\n');
+        input.trim();
+
+      }
+      delay(500);
     }
   }
  
-  
 }
 
 void initialize_ADC(){
@@ -324,6 +354,7 @@ void initialize_ADC(){
     Serial.println("ADC_initialization ERROR");
     Serial.println((CFR_reg_MSB<<4), BIN);
     Serial.println((CFR_reg_LSB<<4), BIN);
+    curr_sense_fault = 1;
   }
 }
 
@@ -377,24 +408,15 @@ void print_min_max(float* max_voltage){   //This function prints the min and max
 }
 
 
-// // we should be able to create a file per power cycle
-// //should be called in setup()
 void dumpDataToSerial() {
   while(1){
     String input = Serial.readStringUntil('\n');
     input.trim();
-    if(input == "debug"){
+    if(input == "begin"){
       break;
     }
   }
-  if (!SD.begin(chipSelect)) {
-    Serial.println("SD card initialization failed!");
-    memory_fault = 1;
-    return;
-  }
-
   // Open the CSV file for reading
-
   File dataFile = SD.open("data.csv");
   
   if (dataFile) {
@@ -441,55 +463,24 @@ void check_memory(){    //this should check all files
   }
   root.close();
 
-  if(memory > 0.9*SD_card_size){
+  if(memory_usage > 0.9*SD_card_size){
     Serial.println("SD card over 90% full");
     memory_fault = 1;
     return;
   }
-
-  for(int i = 0; i < num_files + 3; i++){
-    String filename = "data" + String(i) + ".csv";
-    if(!SD.exists(filename.c_str())){
-      data_file_num = i;
-      break;
+  if(data_file_num == 0){
+    for(int i = 0; i < num_files + 3; i++){
+      String filename = "data" + String(i) + ".csv";
+      if(!SD.exists(filename.c_str())){
+        data_file_num = i;
+        break;
+      }
     }
   }
-
-  // if(SD.exists("state.txt")){
-  //   File dataFile = SD.open("data.csv");
-  //   unsigned long fileSize = dataFile.size();   //file size in bytes
-  //   Serial.println(fileSize);
-  //   memory = fileSize / pow(10,6);
-  //   Serial.println(memory);
-  //   if(memory > 0.9*SD_card_size){
-  //     Serial.println("SD card over 90% full");
-  //     memory_fault = 1;
-  //   }
-  // }
-
-  // else{
-  //   Serial.println("data.csv not found");
-  //   memory_fault = 1;
-  // }
 }
 
-// Function to extract the charge value from a line
-float extractChargeValue(const String& line) {
-  int startIndex = line.indexOf("Charge: ");
-  if (startIndex != -1) {
-    startIndex += 8; // Move past "Charge: "
-    String chargeString = line.substring(startIndex);
-    return chargeString.toFloat();
-  }
-  return 100.00; // Return full charge value if "Charge: " is not found
-}
+void get_SOC(){       //SOC should be written in the state.txt file as: "SOC:100"
 
-void get_SOC(){
-  if (!SD.begin(chipSelect)) {
-    Serial.println("Failed to read SD card");
-    memory_fault = 1;
-    return;
-  }
   if(SD.exists("state.txt")){
     File file = SD.open("state.txt", FILE_READ);
     if (file) {
@@ -520,28 +511,19 @@ void map_text2var(String name, String value){     //map text name and value to a
   }
 }
 
-void update_soc(float curr_sample, String time){
-  soc -= curr_sample / _qt;
-  if (!SD.begin(chipSelect)) {
-    Serial.println("Failed to open SD card to update soc.");
-    return;
-  }
-  File socFile = SD.open("soc.txt", FILE_WRITE);
-  if (socFile) {
-    //add current charge and time to end of file 
-    socFile.print("Time: ");
-    socFile.print(time);
-    socFile.print(", Charge: ");
-    socFile.println(soc);
-    socFile.close();
-    Serial.print("State of charge: ");
-    Serial.println(soc);
-  }else {
-    Serial.println("Error opening soc.txt for writing");
-  }
+float update_SOC(){
+  float min_cell_voltage = cell_voltage[0][0];      //funct. min_max requires that the min and max values are initalized within the range of the min max values
+  float max_cell_voltage = cell_voltage[0][0];
+  int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
+  int discharge_curve_length = sizeof(discharge_points) / sizeof(discharge_points[0]);                              //length of each discharge curve
+  min_max<num_boards,num_cells>(cell_voltage, &min_cell_voltage, &max_cell_voltage);
+
+  return 0.00;
+
 }
 
-void SD_data_write(String filename) {
+void SD_data_write() {
+  String filename = "data" + String(data_file_num) + ".csv";     
   File dataFile = SD.open(filename.c_str(), FILE_WRITE);
   // error checking goes here
   if (dataFile) {
@@ -598,43 +580,6 @@ void SD_data_write(String filename) {
     Serial.println("Error opening data.csv for writing");
     memory_fault = 1;
   }
-}
-
-void initializeSDCard() {
-  if (!SD.begin(chipSelect)) {
-    Serial.println("SD card initialization failed!");
-    return;
-  }
-  SD.remove("data.csv");                          
-  File dataFile = SD.open("data.csv", FILE_WRITE);
-  
-  if (dataFile) {
-    // Write the header row
-    for (int i = 1; i <= num_cells*num_boards; i++) {
-      dataFile.print("Cell ");
-      dataFile.print(i);
-      if (i < num_cells*num_boards) {
-        dataFile.print(", ");
-      }
-    }
-    dataFile.println();
-    dataFile.close();
-    Serial.println("SD Card Init Successful.");
-  } else {
-    Serial.println("Error opening data.csv for writing");
-  }
-}
-
-float avgCurrent() {
-  //currentMutex.lock();
-  float average = (currentCount1 == 0) ? 0.0 : currentSum / currentCount1;
-  currentSum = 0.0;
-  currentCount1 = 0;
-  //currentMutex.unlock();
-
-  // Serial.println(average);
-  
-  return average;
 }
 
 void send_command(uint16_t command){
@@ -744,20 +689,19 @@ void write_register_group(uint16_t command, uint8_t data[num_boards][6]){
   digitalWrite(CS, HIGH);
 }
 
-void poll_ADC(uint16_t command){
+void poll_ADC(uint16_t command, bool curr_measure){
   uint8_t return_data = 0;
-
-  //do not interupt during SPI communication
-  // noInterrupts();
   send_command(command);
+
+  if(!curr_sense_fault && curr_measure){
+  measure_current();
+  }
 
   int num_polls = 0;
   while (return_data == 0) {                                                      //This needs a timeout condition
     return_data = SPI.transfer(0b11111111); // Send dummy byte to receive data
     num_polls++;
   }
-  // interrupts();
-
   // Serial.println("ADC Conversion Done!");
   // Serial.println(num_polls);
   digitalWrite(CS, HIGH);
@@ -805,7 +749,7 @@ void measure_voltage(){
 }
 
 float map_temp(float V){
-   int i;
+  int i;
   int size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
   float R_bias = 10000;
   float V_ref = 3.00;
@@ -899,7 +843,7 @@ bool reset_watchdog(){
 
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j < 9; j++){
-      if(cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp){   //board 8 temp sensor 8 open
+      if(cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp){
         continue;
       }
       else{
@@ -938,7 +882,6 @@ void measure_current(){
   }
 
   digitalWrite(CS1, HIGH);
-  gCurrent = current;
 
   //update current 
   currentSum += current;
@@ -980,7 +923,7 @@ void charger_enable(bool enable){
 }
 
 void TX_CAN(){
-  float min_cell_voltage = cell_voltage[0][0];
+  float min_cell_voltage = cell_voltage[0][0];      //funct. min_max requires that the min and max values are initalized within the range of the min max values
   float max_cell_voltage = cell_voltage[0][0];
   float min_cell_temp = cell_temp[0][0];
   float max_cell_temp = cell_temp[0][0];
@@ -1209,9 +1152,10 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
 }
 
 void myCallback() {    
-  //Serial.println("Callback Called");   
   measure_voltage();
+  measure_temp();
   reset_watchdog();
+  watchdog_callback = true;   //set watchdog callback flag
 }
 
 
@@ -1255,394 +1199,3 @@ void wakeup_idle(uint8_t total_ic){ //Number of ICs in the system
   digitalWrite(CS, HIGH);
 	}
 }
-
-
-// void LTC681x_adow(uint8_t MD, //ADC Mode
-// 				  uint8_t PUP,//Pull up/Pull down current
-// 				  uint8_t CH, //Channels
-// 				  uint8_t DCP//Discharge Permit
-// 				 )
-// {
-// 	uint8_t cmd[2];
-// 	uint8_t md_bits;
-	
-// 	md_bits = (MD & 0x02) >> 1;
-// 	cmd[0] = md_bits + 0x02;
-// 	md_bits = (MD & 0x01) << 7;
-// 	cmd[1] =  md_bits + 0x28 + (PUP<<6) + CH+(DCP<<4);
-	
-// 	cmd_68(cmd);
-// }
-
-// /* Start GPIOs open wire ADC conversion */
-// void LTC681x_axow(uint8_t MD, //ADC Mode
-// 				  uint8_t PUP //Pull up/Pull down current
-// 				 )
-// {
-// 	uint8_t cmd[2];
-// 	uint8_t md_bits;
-	
-// 	md_bits = (MD & 0x02) >> 1;
-// 	cmd[0] = md_bits + 0x04;
-// 	md_bits = (MD & 0x01) << 7;
-// 	cmd[1] =  md_bits + 0x10+ (PUP<<6) ;//+ CH;
-	
-// 	cmd_68(cmd);
-// }
-
-// /* Runs the data sheet algorithm for open wire for single cell detection */
-// void LTC681x_run_openwire_single(uint8_t total_ic, // Number of ICs in the daisy chain
-// 								cell_asic ic[] // A two dimensional array that will store the data
-// 								)
-// {				  
-// 	uint16_t OPENWIRE_THRESHOLD = 4000;
-// 	const uint8_t  N_CHANNELS = ic[0].ic_reg.cell_channels;
-	
-// 	uint16_t pullUp[total_ic][N_CHANNELS];
-// 	uint16_t pullDwn[total_ic][N_CHANNELS];
-// 	int16_t openWire_delta[total_ic][N_CHANNELS];
-	
-// 	int8_t error;
-// 	int8_t i;
-// 	uint32_t conv_time=0;
-
-// 	wakeup_sleep(total_ic);
-// 	LTC681x_clrcell();
-	
-// 	// Pull Ups
-// 	for (i = 0; i < 3; i++)
-// 	{ 
-// 	  wakeup_idle(total_ic);
-// 	  LTC681x_adow(MD_26HZ_2KHZ,PULL_UP_CURRENT,CELL_CH_ALL,DCP_DISABLED);
-// 	  conv_time =LTC681x_pollAdc();
-// 	} 
-	
-// 	wakeup_idle(total_ic);
-// 	error=LTC681x_rdcv(0, total_ic,ic);
-	
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{
-// 	    for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{
-// 		  pullUp[cic][cell] = ic[cic].cells.c_codes[cell];
-// 		}	
-// 	}
-
-// 	// Pull Downs
-// 	for (i = 0; i < 3; i++)
-// 	{  
-// 	  wakeup_idle(total_ic);
-// 	  LTC681x_adow(MD_26HZ_2KHZ,PULL_DOWN_CURRENT,CELL_CH_ALL,DCP_DISABLED);
-// 	  conv_time =LTC681x_pollAdc();
-// 	}
-	
-// 	wakeup_idle(total_ic);
-// 	error=LTC681x_rdcv(0, total_ic,ic); 
-	
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{		  
-// 	    for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{
-// 		   pullDwn[cic][cell] = ic[cic].cells.c_codes[cell];
-// 		}
-// 	}
-
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{
-// 	  ic[cic].system_open_wire = 0xFFFF;
-	  
-// 		for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{
-// 			if (pullDwn[cic][cell] < pullUp[cic][cell])                   
-// 			{
-// 				openWire_delta[cic][cell] = (pullUp[cic][cell] - pullDwn[cic][cell]);
-// 			}
-// 			else
-// 			{
-// 				openWire_delta[cic][cell] = 0;                                             
-// 			}  
-				
-// 			if (openWire_delta[cic][cell]>OPENWIRE_THRESHOLD)
-// 			{
-// 				ic[cic].system_open_wire = cell+1;
-// 			}
-// 		}
-		
-// 		if (pullUp[cic][0] == 0)
-// 		{
-// 		  ic[cic].system_open_wire = 0;
-// 		}
-		
-// 		if (pullUp[cic][(N_CHANNELS-1)] == 0)//checking the Pull up value of the top measured channel
-// 		{
-// 		  ic[cic].system_open_wire = N_CHANNELS;
-// 		}	
-// 	}
-// }
-
-// /* Runs the data sheet algorithm for open wire for multiple cell and two consecutive cells detection */
-//  void LTC681x_run_openwire_multi(uint8_t total_ic, // Number of ICs in the daisy chain
-// 						  cell_asic ic[] // A two dimensional array that will store the data
-// 						  )
-// {              
-// 	uint16_t OPENWIRE_THRESHOLD = 4000;
-// 	const uint8_t  N_CHANNELS = ic[0].ic_reg.cell_channels;
-
-// 	uint16_t pullUp[total_ic][N_CHANNELS];
-// 	uint16_t pullDwn[total_ic][N_CHANNELS];
-// 	uint16_t openWire_delta[total_ic][N_CHANNELS];
-
-// 	int8_t error;
-// 	int8_t opencells[N_CHANNELS];
-// 	int8_t n=0;
-// 	int8_t i,j,k;
-// 	uint32_t conv_time=0;
-
-// 	wakeup_sleep(total_ic);
-// 	LTC681x_clrcell();
-
-// 	// Pull Ups
-// 	for (i = 0; i < 5; i++)
-// 	{ 
-// 		wakeup_idle(total_ic);
-// 		LTC681x_adow(MD_26HZ_2KHZ,PULL_UP_CURRENT,CELL_CH_ALL,DCP_DISABLED);
-// 		conv_time =LTC681x_pollAdc();
-// 	} 
-
-// 	wakeup_idle(total_ic);
-// 	error = LTC681x_rdcv(0, total_ic,ic);
-
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{
-// 	    for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{
-// 		  pullUp[cic][cell] = ic[cic].cells.c_codes[cell];
-// 		}
-// 	}
-
-// 	// Pull Downs
-// 	for (i = 0; i < 5; i++)
-// 	{  
-// 	  wakeup_idle(total_ic);
-// 	  LTC681x_adow(MD_26HZ_2KHZ,PULL_DOWN_CURRENT,CELL_CH_ALL,DCP_DISABLED);
-// 	  conv_time =   LTC681x_pollAdc();
-// 	}
-
-// 	wakeup_idle(total_ic);
-// 	error = LTC681x_rdcv(0, total_ic,ic); 
-
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{
-// 		for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{
-// 		   pullDwn[cic][cell] = ic[cic].cells.c_codes[cell];
-// 		}
-// 	}
-
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{			  
-// 		for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{
-// 			if (pullDwn[cic][cell] < pullUp[cic][cell])                   
-// 				{
-// 					openWire_delta[cic][cell] = (pullUp[cic][cell] - pullDwn[cic][cell]);
-// 				}
-// 				else
-// 				{
-// 					openWire_delta[cic][cell] = 0;                                             
-// 				}
-// 		}  
-// 	}
-
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{ 
-// 		n=0;
-						
-// 		Serial.print("IC:");
-// 		Serial.println(cic+1, DEC);
-		
-// 		for (int cell=0; cell<N_CHANNELS; cell++)
-// 		{  
-		 
-// 		  if (openWire_delta[cic][cell]>OPENWIRE_THRESHOLD)
-// 			{
-// 				opencells[n] = cell+1;
-// 				n++;
-// 				for (int j = cell; j < N_CHANNELS-3 ; j++)                       
-// 				{
-// 					if (pullUp[cic][j + 2] == 0)
-// 					{
-// 					opencells[n] = j+2;
-// 					n++;
-// 					}
-// 				}
-// 				if((cell==N_CHANNELS-4) && (pullDwn[cic][N_CHANNELS-3] == 0))
-// 				{
-// 					  opencells[n] = N_CHANNELS-2;
-// 					  n++;
-// 				}
-// 			}
-// 		}
-// 		if (pullDwn[cic][0] == 0)
-// 		{
-// 		  opencells[n] = 0;
-// 		  Serial.println("Cell 0 is Open and multiple open wires maybe possible.");
-// 		  n++;
-// 		}
-					
-// 		if (pullDwn[cic][N_CHANNELS-1] == 0)
-// 		{
-// 		  opencells[n] = N_CHANNELS;
-// 		  n++;
-// 		}
-					
-// 		if (pullDwn[cic][N_CHANNELS-2] == 0)
-// 		{  
-// 		  opencells[n] = N_CHANNELS-1;
-// 		  n++;
-// 		}
-		
-// 	//Removing repetitive elements
-// 		for(i=0;i<n;i++)
-// 		{
-// 			for(j=i+1;j<n;)
-// 			{
-// 				if(opencells[i]==opencells[j])
-// 				{
-// 					for(k=j;k<n;k++)
-// 						opencells[k]=opencells[k+1];
-						
-// 					n--;
-// 				}
-// 				else
-// 					j++;
-// 			}
-// 		}
-					
-// 	// Sorting open cell array
-// 		for(int i=0; i<n; i++)
-// 		{
-// 			for(int j=0; j<n-1; j++)
-// 			{
-// 				if( opencells[j] > opencells[j+1] )
-// 				{
-// 					k = opencells[j];
-// 					opencells[j] = opencells[j+1];
-// 					opencells[j+1] = k;
-// 				}
-// 			}
-// 		}
-					
-// 	//Checking the value of n				
-// 		Serial.println("Number of Open wires:");
-// 		Serial.println(n);
-		   
-// 	//Printing open cell array
-// 		Serial.println("OPEN CELLS:");
-// 		if(n==0)
-// 		{
-// 			Serial.println("No Open wires");
-// 		}
-// 		else
-// 		{				
-// 			for(i=0;i<n;i++)
-// 			{
-// 					Serial.println(opencells[i]);	
-// 			}
-// 		}
-// 	}
-// 	Serial.println("\n");
-// }
-
-// /* Runs open wire for GPIOs */
-// void LTC681x_run_gpio_openwire(uint8_t total_ic, // Number of ICs in the daisy chain
-// 								cell_asic ic[] // A two dimensional array that will store the data
-// 								)
-//  {				  
-// 	uint16_t OPENWIRE_THRESHOLD = 150;
-// 	const uint8_t  N_CHANNELS = ic[0].ic_reg.aux_channels +1;
-	
-// 	uint16_t aux_val[total_ic][N_CHANNELS];
-// 	uint16_t pDwn[total_ic][N_CHANNELS];
-// 	uint16_t ow_delta[total_ic][N_CHANNELS];
-	
-// 	int8_t error;
-// 	int8_t i;
-// 	uint32_t conv_time=0;
-
-// 	wakeup_sleep(total_ic); 
-// 	LTC681x_clraux();
-	 
-// 	for (i = 0; i < 3; i++)
-// 	{ 
-// 	   wakeup_idle(total_ic);
-// 	   LTC681x_adax(MD_7KHZ_3KHZ, AUX_CH_ALL);
-// 	   conv_time= LTC681x_pollAdc();
-// 	}
-	
-// 	wakeup_idle(total_ic);
-// 	error = LTC681x_rdaux(0, total_ic,ic);
-	
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{
-// 	    for (int channel=0; channel<N_CHANNELS; channel++)
-// 		{
-// 			aux_val[cic][channel]=ic[cic].aux.a_codes[channel];
-// 		}
-// 	}	
-// 	LTC681x_clraux();
-	
-// 	// pull downs
-// 	for (i = 0; i < 3; i++)
-// 	{ 
-// 	   wakeup_idle(total_ic);
-// 	   LTC681x_axow(MD_7KHZ_3KHZ,PULL_DOWN_CURRENT);
-// 	   conv_time =LTC681x_pollAdc();
-// 	} 
-	
-// 	wakeup_idle(total_ic);
-// 	error = LTC681x_rdaux(0, total_ic,ic);
-	
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{
-// 	   for (int channel=0; channel<N_CHANNELS; channel++)
-// 		{
-// 			pDwn[cic][channel]=ic[cic].aux.a_codes[channel] ;
-// 		}
-// 	}
-	
-// 	for (int cic=0; cic<total_ic; cic++)
-// 	{  
-// 		ic[cic].system_open_wire = 0xFFFF;
-		
-// 		for (int channel=0; channel<N_CHANNELS; channel++)
-// 		{
-// 			if (pDwn[cic][channel] > aux_val[cic][channel])                   
-// 			{
-// 				ow_delta[cic][channel] = (pDwn[cic][channel] - aux_val[cic][channel]);
-// 			}
-// 			else
-// 			{
-// 				ow_delta[cic][channel] = 0;                                             
-// 			} 
-			
-// 			if(channel<5)
-// 			{
-// 				if (ow_delta[cic][channel] > OPENWIRE_THRESHOLD) 
-// 				{
-// 					ic[cic].system_open_wire= channel+1;
-					
-// 				}  
-// 			}
-// 			else if(channel>5)
-// 			{
-// 				if (ow_delta[cic][channel] > OPENWIRE_THRESHOLD) 
-// 				{
-// 					ic[cic].system_open_wire= channel;
-					
-// 				}  
-// 			}	
-// 		}
-// 	}	  
-// }
-

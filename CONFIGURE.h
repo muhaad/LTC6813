@@ -16,8 +16,8 @@ const int watchdog_timeout = 0;  //watchdog timeout (in seconds). setting to 0 w
 const int num_boards = 4;
 const int num_cells = 17;       //cells per board
 
-//BMS operation mode. Leave empty to determine mode during runtime
-String mode = "";     //"", "charge", "drive", "debug"
+//BMS operation mode. Leave as empty string to determine mode during runtime
+String mode = "";     //"", "charge", "standby", "drive", "debug"
 
 //CAN Bus Parameters
 uint16_t BMS_ID = 0x123;             //standard ID of BMS TX messages
