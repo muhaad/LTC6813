@@ -36,7 +36,7 @@ bool comms_fault = 0;
 bool curr_sense_fault = 0;
 bool watchdog_callback = 0;
 bool watchdog_reset = 0;
-bool debug = 0;
+bool debug = 1;
 
 unsigned int start_time = 0;
 
@@ -157,11 +157,13 @@ void setup() {
   
   if(mode == ""){
     measure_voltage();
-    measure_temp();
-    reset_watchdog();
     get_SOC();
+
     CAN_message_t msg;
     while(1){
+      measure_voltage();
+      measure_temp();
+      reset_watchdog();
       msg = RX_CAN();
       String input = Serial.readStringUntil('\n');
       input.trim();
@@ -179,6 +181,7 @@ void setup() {
         mode = "debug";
         break;
       }
+      delay(500);
     }
   }
 }
@@ -292,17 +295,7 @@ void loop() {
   else{       //debug mode
     digitalWrite(20, LOW);                  //open shutdown circuit in debug mode
     Serial.println("Debug Mode Entered");
-    while(1){
-      String input = Serial.readStringUntil('\n');
-      input.trim();
-      if(input == "dump"){
-        check_memory();               //just used to print out the file names
-        String input = Serial.readStringUntil('\n');
-        input.trim();
-
-      }
-      delay(500);
-    }
+    dumpDataToSerial();
   }
  
 }
@@ -416,21 +409,21 @@ void dumpDataToSerial() {
       break;
     }
   }
-  // Open the CSV file for reading
-  File dataFile = SD.open("data.csv");
-  
-  if (dataFile) {
-    // Send file content
-    while (dataFile.available()) {
-      Serial.write(dataFile.read());
-    }
-    dataFile.close();
-    Serial.println("serial dump done");
 
-  } 
-  else {
-    Serial.println("Error opening data.csv for reading");
+  File root = SD.open("/");
+  File entry = root.openNextFile();
+  while (entry) {
+    Serial.println(entry.name());
+    while (entry.available()) {
+    Serial.write(entry.read());
   }
+    entry.close();
+    //SD.remove(entry.name());
+    entry = root.openNextFile();
+  }
+  root.close();
+
+  Serial.println("done");
 }
 
 void check_memory(){    //this should check all files
@@ -463,7 +456,7 @@ void check_memory(){    //this should check all files
   }
   root.close();
 
-  if(memory_usage > 0.9*SD_card_size){
+  if(memory_usage > 0.9*(SD_card_size*1e9)){
     Serial.println("SD card over 90% full");
     memory_fault = 1;
     return;
@@ -749,8 +742,7 @@ void measure_voltage(){
 }
 
 float map_temp(float V){
-  int i;
-  int size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
+  int const size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
   float R_bias = 10000;
   float V_ref = 3.00;
 
@@ -760,18 +752,19 @@ float map_temp(float V){
 
   float NTC_res = (V/V_ref*R_bias)/(1-V/V_ref);
 
-  float dist = std::abs(NTC_res - NTC_LUT[0]);
+  // float dist = std::abs(NTC_res - NTC_LUT[0]);
+  // for(i = 1; i<size; i++){
+  //   float new_dist = std::abs(NTC_res - NTC_LUT[i]);
+  //   if(new_dist < dist){
+  //     dist = new_dist;
+  //   }
+  //   else{
+  //     i--;
+  //     break;
+  //   }
+  // }
 
-  for(i = 1; i<size; i++){
-    float new_dist = std::abs(NTC_res - NTC_LUT[i]);
-    if(new_dist < dist){
-      dist = new_dist;
-    }
-    else{
-      i--;
-      break;
-    }
-  }
+  int i = search<size>(NTC_LUT, NTC_res);
   float temperature = float(i)/float(size)*(150+55)-55;
   //temperature = V;
   return(temperature);

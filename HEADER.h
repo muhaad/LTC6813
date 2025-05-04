@@ -23,21 +23,43 @@ template <size_t rows, size_t cols> inline void min_max(float arr_2D[rows][cols]
     }
 }
 
-template <size_t length> inline int search(float arr[length], float value) {       //searches a sorted list for the nearest element and returns it index. 
-
-float dist = std::abs(value - arr[0]);
-    int best_index = 0;
-    for (size_t i = 1; i < length; ++i) {
-        float new_dist = std::abs(value - arr[i]);
-        if (new_dist < dist) {
-            dist = new_dist;
-            best_index = i;
-        } else {
-            break; 
+template <size_t length> inline int search(float arr[length], float value, bool return_lower = false) {       //searches a sorted DECRESAING list for the nearest element and returns its index. the "lower" flag if set will return the nearest element that is equal or lower
+    //online function testbench:
+    //https://www.programiz.com/online-compiler/5fkt3FMi4yJhY
+    if (value >= arr[0]) 
+        return(0);
+    if (value <= arr[length - 1])
+        return(length - 1);
+    int low = 0;
+    int high = length - 1;
+    while (low <= high) {
+            int mid = low + (high - low) / 2;
+            if (arr[mid] == value)
+                return mid;
+            if (arr[mid] > value)
+                low = mid + 1;
+            else
+                high = mid - 1;
         }
+        
+    if (return_lower || std::abs(arr[low] - value) < std::abs(arr[high] - value)) {
+        return low; // arr[low] is closer
+    } else {
+        return high; // arr[high] is closer
     }
+}
 
-    return best_index;
+template <size_t length> inline float interpolate(float arr_x[length], float arr_y[length], float x_value) {       //linear interpolate an x-value
+  int x1_index = 0;
+  int x2_index = 0;
+  int y1_index = 0;
+  int y2_index = 0;
+  if(x_value <= arr_x[0]) 
+    return arr_x[0];
+  if(x_value >= arr_x[length - 1])
+    return arr_x[length - 1];
+  return float(0);
+
 }
 
 #endif
