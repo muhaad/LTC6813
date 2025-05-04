@@ -41,7 +41,7 @@ template <size_t length> inline int search(float arr[length], float value, bool 
             else
                 high = mid - 1;
         }
-        
+
     if (return_lower || std::abs(arr[low] - value) < std::abs(arr[high] - value)) {
         return low; // arr[low] is closer
     } else {
@@ -49,17 +49,22 @@ template <size_t length> inline int search(float arr[length], float value, bool 
     }
 }
 
-template <size_t length> inline float interpolate(float arr_x[length], float arr_y[length], float x_value) {       //linear interpolate an x-value
-  int x1_index = 0;
+template <size_t length> inline float interpolate(float arr_x[length], float arr_y[length], float x_value) {       //linear interpolate an x-value from sorted DECREASING arrays: Y = Y1 + (Y2-Y1)/(X2-X1)*(X-X1)
+  int x1_index = 0; 
   int x2_index = 0;
-  int y1_index = 0;
-  int y2_index = 0;
-  if(x_value <= arr_x[0]) 
-    return arr_x[0];
-  if(x_value >= arr_x[length - 1])
-    return arr_x[length - 1];
-  return float(0);
+  //out of range cases just return the y-bound of the array
+  if(x_value >= arr_x[0]) 
+    return arr_y[0];
+  if(x_value <= arr_x[length - 1])
+    return arr_y[length - 1];
 
+  x1_index = search<length>(arr_x, x_value, true);
+  if(x1_index == 0){        //this condition should not be true if the search function works and the edge cases are handled properly
+    return arr_y[0];
+  }
+  x2_index = x1_index - 1;    //decreasing arrays so x2_index is less than x1_index
+  float y_value = arr_y[x1_index] + (arr_y[x2_index] - arr_y[x1_index]) / (arr_x[x2_index] - arr_x[x1_index]) * (x_value - arr_x[x1_index]);
+  return(y_value);
 }
 
 #endif

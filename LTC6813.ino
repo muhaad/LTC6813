@@ -152,13 +152,11 @@ void setup() {
 
 
   check_memory();
-  
 
   
   if(mode == ""){
     measure_voltage();
-    get_SOC();
-
+    update_SOC();
     CAN_message_t msg;
     while(1){
       measure_voltage();
@@ -284,8 +282,8 @@ void loop() {
     }
     if(inv_voltage < pack_voltage * 0.5){    //checks inverter voltage to see if tractive system voltage is dropping
       mode = "standby";                         //enter standby mode if ready to drive is exited
-      data_file_num = 0;
-      check_memory();         //assign a new data file number in case RTD is entered agian
+      //data_file_num = 0;
+      //check_memory();         //assign a new data file number in case RTD is entered agian
       break;
     }
     delay(10);
@@ -505,15 +503,29 @@ void map_text2var(String name, String value){     //map text name and value to a
 }
 
 float update_SOC(){
+  const int  discharge_curve_length = sizeof(discharge_points) / sizeof(discharge_points[0]);                              //length of each discharge curve
+  const float max_capacity = discharge_points[0];                                                                           //maximum capacity of a single cell
+  const int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
+
   float min_cell_voltage = cell_voltage[0][0];      //funct. min_max requires that the min and max values are initalized within the range of the min max values
   float max_cell_voltage = cell_voltage[0][0];
-  int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
-  int discharge_curve_length = sizeof(discharge_points) / sizeof(discharge_points[0]);                              //length of each discharge curve
   min_max<num_boards,num_cells>(cell_voltage, &min_cell_voltage, &max_cell_voltage);
+  float discharged = interpolate<discharge_curve_length>(discharge_curves[0], discharge_points, min_cell_voltage);    //capacity which has already been discharged (mAh)
+  soc = (max_capacity - discharged)/max_capacity * 100;
+  Serial.print("SOC: ");  Serial.println(soc);
+  return soc;
+}
 
-  return 0.00;
+void upadate_current_limit(){
+  const int  discharge_curve_length = sizeof(discharge_points) / sizeof(discharge_points[0]);                              //length of each discharge curve
+  const float max_capacity = discharge_points[0];                                                                           //maximum capacity of a single cell
+  const int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
+
+
+
 
 }
+
 
 void SD_data_write() {
   String filename = "data" + String(data_file_num) + ".csv";     
@@ -612,9 +624,6 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   uint8_t response_pec0;
   uint8_t response_pec1;
 
-  //do not interuppt during SPI communication
-  // noInterrupts();
-
   send_command(command);
 
   for (int i = 0; i < num_boards; i++){
@@ -622,7 +631,6 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
       response[i][j] = SPI.transfer(0b11111111); // Send dummy byte to receive data
       //Serial.println(response[i][j], BIN); 
     }
-
     response_pec0 = SPI.transfer(0xFF);
     response_pec1 = SPI.transfer(0xFF);
     pec = pec15_calc(6, response[i]);
@@ -632,20 +640,14 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   // interrupts();
   
   if(response_pec0 != pec0 || response_pec1 != pec1){   //this recursion needs fixed
+    Serial.println("pec error");
     wakeup_sleep(num_boards);
     read_register_group(command, response);
   }
 
-      //Serial.println("Response");
-      //Serial.println(response_pec0);
-      //Serial.println(response_pec1);
-      //Serial.println("Calc");
-      //Serial.println(pec0);
-      //Serial.println(pec1); 
-  //Serial.println('\n');
-//Serial.println('\n');
-
   }
+
+
 
       pec = pec15_calc(6, response[0]);     //this needs fixed to include multiple boards
 
@@ -707,6 +709,7 @@ void measure_voltage(){
   ////cell voltage measurement algorithm outlined in INTERNAL PROTECTION AND FILTERING section of LTC6813 datasheet////
   poll_ADC(ADCV | 0b1);   //measure cells 1,7,13 to allow MUX voltage to settle
   delay(cell_RC * 6);
+
   poll_ADC(ADCV);   //initiate and wait for voltage measurement
 
   for(int i=0; i*3 < num_cells; i++){         //i: cell group
@@ -725,6 +728,7 @@ void measure_voltage(){
       }
     }
   }
+
 
   if(debug){
     Serial.println("Voltages:");
@@ -826,9 +830,9 @@ bool reset_watchdog(){
         continue;
       }
       else{
+          digitalWrite(20, LOW);
           Serial.println("invalid voltage");
           Serial.println(cell_voltage[i][j]);
-          digitalWrite(20, LOW);
           return false;
       }
     }
@@ -840,8 +844,8 @@ bool reset_watchdog(){
         continue;
       }
       else{
-          Serial.print("invalid temp Board:  "); Serial.print(i+1); Serial.print("Num: "); Serial.println(j+1);
           digitalWrite(20, LOW);
+          Serial.print("invalid temp Board:  "); Serial.print(i+1); Serial.print("Num: "); Serial.println(j+1);
           return false;
       }
     }
