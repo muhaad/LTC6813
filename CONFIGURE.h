@@ -10,7 +10,7 @@ const float max_temp = 60;
 const float min_temp = 0;
 const float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
 const float UV = 2.8;       //under-voltage limit (V)
-const int watchdog_timeout = 0;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
+const int watchdog_timeout = 100;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
 
 //architecture
 const int num_boards = 4;
@@ -21,7 +21,7 @@ String mode = "";     //"", "charge", "standby", "drive", "debug"
 
 //CAN Bus Parameters
 uint16_t BMS_ID = 0x123;             //standard ID of BMS TX messages
-uint32_t INV_TX_ID = 0x0A7;         //CAN Message ID of message send from inverter of DC Bus Voltage (100 Hz frequency).
+uint32_t INV_TX_ID = 0x0A0;         //CAN Message ID of message send from inverter of DC Bus Voltage (100 Hz frequency).
 uint32_t CHG_TX_ID = 0x18FF50E5;    //CAN Message ID of messages sent from charger
 
 //charging parameters
@@ -39,5 +39,5 @@ int ADC_mode = 0;     //integer 0-7 to set ADC sampling frequency
 #define cell_RC 0.0001  //C pin filter RC time constant in milliseconds (R*C*1000)
 
 //SD Card
-float SD_card_size = 116;   //SD card size in Gb
+float SD_card_size = 32;   //SD card size in Gb
 #endif

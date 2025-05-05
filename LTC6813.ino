@@ -29,6 +29,9 @@ const int chipSelect = BUILTIN_SDCARD;
 #define CS2 38   //3nd chip select pin isoSPI
 #define CS1 0   //chip select for ADC
 
+//counters
+unsigned int sense_watchdog_timer;   //senseboard watchdog timer. Sense boards will go to sleep after 2 seconds if no valid command with correct PEC is sent from master. 
+
 //flags
 int wire_cut = 0;
 bool memory_fault = 0;
@@ -36,7 +39,7 @@ bool comms_fault = 0;
 bool curr_sense_fault = 0;
 bool watchdog_callback = 0;
 bool watchdog_reset = 0;
-bool debug = 1;
+bool debug = 0;
 
 unsigned int start_time = 0;
 
@@ -78,15 +81,13 @@ void setup() {
   pinMode(20, OUTPUT);
   digitalWrite(20, LOW);
 
-  //startup timestamp
+  delay(5000);      //delay upon startup should be use to make it easier to recover the teensy when runtime errors occurs
+
+  //start timers
   start_time = millis();
+  sense_watchdog_timer = start_time - 5000; //initial sense_watchdog timer with expired watchdog time (T - 2000 milliseconds)
   
-  //dump data from SD card to external program-- Arduino IDE serial monitor will need to be off
-  //*******
   Serial.begin(9600);
-  //delay(5000);
-  //dumpDataToSerial();
-  //delay(1000);
   Serial.println("startup");
   Serial.print("Start Time: "); Serial.println(start_time);
 
@@ -119,6 +120,8 @@ void setup() {
 
   //    https://github.com/tonton81/FlexCAN_T4/blob/master/examples/mailbox_filtering_example_with_interrupts/mailbox_filtering_example_with_interrupts.ino
   // Mailboxes must be configured for all messages - both TX and RX
+
+
   can.setMB((FLEXCAN_MAILBOX)0,RX,STD);   //Standard mailbox for Inverter ID
   can.setMB((FLEXCAN_MAILBOX)1,RX,EXT);   //Extended id for charger
   can.setMB((FLEXCAN_MAILBOX)2,TX,EXT);   //BMS TX -> charger id
@@ -139,9 +142,8 @@ void setup() {
     wdt.begin(config);              //This needs moved to the main loop
   }
 
-
   //Bring up ADC
-  initialize_ADC();
+  //initialize_ADC();
 
     //current offset compensation
   //measure_current();
@@ -150,15 +152,20 @@ void setup() {
   //Bring up references on sense boards
   //configure_sense();
 
+  //check_memory();
 
-  check_memory();
+  // while(1){    //voltage poll and temperature poll take 16 and 24 milliseconds. The rest of the measure functions only take 1 or two milliseconds
+  //   start_time = millis();
+  //   measure_voltage();
+  //   Serial.println(millis() - start_time);
+  // }
 
-  
   if(mode == ""){
     measure_voltage();
     update_SOC();
     CAN_message_t msg;
     while(1){
+      charger_enable(1);
       measure_voltage();
       measure_temp();
       reset_watchdog();
@@ -204,7 +211,7 @@ void loop() {
       }
     }
     //00100 low ac power on charger flag
-    delay(1000);    //delay so that another Charger CAN message is sent to the BMS (so that an empty CAN buffer is not read)
+    delay(1000);    //delay so that another Charger CAN message is sent to the BMS (so that an empty CAN buffer is not read which would raise a charger error)
 
     //enter charge cycle
     while(1){
@@ -598,9 +605,15 @@ void send_command(uint16_t command){
   cmd0 = command >> 8;
   cmd1 = command >> 0;
 
+  if(millis() - sense_watchdog_timer >= 1800){
   wakeup_sleep(num_boards + 1);
+  sense_watchdog_timer = millis();
+  }
+  else{
+  wakeup_idle(num_boards);
+  sense_watchdog_timer = millis();
+  }
 
-  //delay(2);          
   digitalWrite(CS, LOW);
 
   comm_arr[0] = cmd0;
@@ -614,6 +627,7 @@ void send_command(uint16_t command){
   SPI.transfer(cmd1);
   SPI.transfer(pec0);
   SPI.transfer(pec1);
+
 }
 
 void read_register_group(uint16_t command, uint8_t response[num_boards][6]){      //register group is always 6 bytes 
@@ -636,20 +650,18 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
     pec = pec15_calc(6, response[i]);
     pec1 = pec >> 0;
     pec0 = pec >> 8;
-  
-  // interrupts();
-  
+    
   if(response_pec0 != pec0 || response_pec1 != pec1){   //this recursion needs fixed
     Serial.println("pec error");
-    wakeup_sleep(num_boards);
-    read_register_group(command, response);
+    wakeup_sleep(num_boards + 1);
+    //read_register_group(command, response);
   }
 
   }
 
 
 
-      pec = pec15_calc(6, response[0]);     //this needs fixed to include multiple boards
+  pec = pec15_calc(6, response[0]);     //this needs fixed to include multiple boards
 
       // Serial.println("response pec");
       // Serial.println(response_pec0, BIN);
@@ -699,16 +711,17 @@ void poll_ADC(uint16_t command, bool curr_measure){
   }
   // Serial.println("ADC Conversion Done!");
   // Serial.println(num_polls);
+
   digitalWrite(CS, HIGH);
 }
 
-void measure_voltage(){
+void measure_voltage(){     //18 millisecond execution time
   uint8_t response[num_boards][6];
   uint16_t cell_comm[6] = {RDCVA, RDCVB, RDCVC, RDCVD, RDCVE, RDCVF};   //read cell voltage registers A through E commands
 
   ////cell voltage measurement algorithm outlined in INTERNAL PROTECTION AND FILTERING section of LTC6813 datasheet////
-  poll_ADC(ADCV | 0b1);   //measure cells 1,7,13 to allow MUX voltage to settle
-  delay(cell_RC * 6);
+  //poll_ADC(ADCV | 0b1);   //measure cells 1,7,13 to allow MUX voltage to settle
+  //delay(cell_RC * 6);
 
   poll_ADC(ADCV);   //initiate and wait for voltage measurement
 
@@ -745,7 +758,7 @@ void measure_voltage(){
   
 }
 
-float map_temp(float V){
+float map_temp(float V){  
   int const size = sizeof(NTC_LUT) / sizeof(NTC_LUT[0]);
   float R_bias = 10000;
   float V_ref = 3.00;
@@ -756,6 +769,7 @@ float map_temp(float V){
 
   float NTC_res = (V/V_ref*R_bias)/(1-V/V_ref);
 
+  // int i = 0;
   // float dist = std::abs(NTC_res - NTC_LUT[0]);
   // for(i = 1; i<size; i++){
   //   float new_dist = std::abs(NTC_res - NTC_LUT[i]);
@@ -774,7 +788,7 @@ float map_temp(float V){
   return(temperature);
 }
 
-void measure_temp(bool open_wire_check){
+void measure_temp(bool open_wire_check){        //25 millisecond execution time
 
   uint8_t response[num_boards][6];
   uint16_t aux_comm[4] = {RDAUXA, RDAUXB, RDAUXC, RDAUXD};   //read aux registers A through D commands
@@ -1156,16 +1170,17 @@ void myCallback() {
 }
 
 
-//Analog Devices provided Functions
+//Analog Devices provided Functions//
 
-void wakeup_sleep(uint8_t total_ic) //Number of ICs in the system. This function needs some work
+void wakeup_sleep(uint8_t total_ic) //Number of ICs in the system. This function needs some work. Enters Sleep state after 2 seconds of no command sent with valid PEC
 {
+  Serial.println("Wakeup Sleep");
 	for (int i =0; i<total_ic; i++)
 	{
 	   digitalWrite(CS, LOW);
-	   delay(3); // Guarantees the LTC681x will be in standby
+     delayMicroseconds(300);
 	   digitalWrite(CS, HIGH);
-	   delay(1);
+     delayMicroseconds(10);
 	}
 }
 
@@ -1189,10 +1204,12 @@ uint16_t pec15_calc(uint8_t len, //Number of bytes that will be used to calculat
 	return(remainder*2);//The CRC15 has a 0 in the LSB so the remainder must be multiplied by 2
 }
 
-void wakeup_idle(uint8_t total_ic){ //Number of ICs in the system
-	for (int i =0; i<total_ic + 2; i++){    //+2 for the LTC6820s
+void wakeup_idle(uint8_t total_ic){ //idle after 4.3 ms of no isoSPI activity
+  //Serial.println("wakeup_idle");
+	for (int i =0; i<total_ic + 1; i++){    //+1 IC for the LTC6820
   digitalWrite(CS, LOW);
   SPI.transfer(0b11111111);     //Guarantees the isoSPI will be in ready mode
   digitalWrite(CS, HIGH);
 	}
+  delayMicroseconds(1);   //This delay is absolutely needed: t5 in datasheet - CSB Rising Edge to CSB Falling Edge >= 0.65us
 }
