@@ -31,6 +31,8 @@ const int chipSelect = BUILTIN_SDCARD;
 
 //counters
 unsigned int sense_watchdog_timer;   //senseboard watchdog timer. Sense boards will go to sleep after 2 seconds if no valid command with correct PEC is sent from master. 
+bool new_voltage = false;
+bool new_temp = false;
 
 //flags
 int wire_cut = 0;
@@ -75,13 +77,6 @@ float die_temps[num_boards];                   //most recent sense board LTC6813
 float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
-
-//measurement buffers
-unsigned int time_buffer[SD_interval];
-float voltage_buffer[SD_interval/volt_interval][num_boards][num_cells];
-float temp_buffer[SD_interval/temp_interval][num_boards][9]; 
-float current_buffer[SD_interval/current_interval];
-
 
 void setup() {
   //open shutdown circuit
@@ -139,10 +134,14 @@ void setup() {
   can.setMBFilter(MB2, 0x1806E5F4);  //Mailbox for Charger CAN Messages
 
 
-  //Watchdog
-  if(watchdog_timeout != 0){
-    WDT_timings_t config;
-    config.trigger = max(1,  watchdog_timeout - 1);   /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
+  //Watchdog 
+  if(watchdog_timeout != 0){                  //callback function is having some issues
+    WDT_timings_t config; 
+    int watchdog_trigger = watchdog_timeout - 1;
+    if(watchdog_trigger < 1){
+      watchdog_trigger = 1;
+    }
+    config.trigger = 6;   /* in seconds, 0->128 */    //time until watchdog callback function is triggered. 
     config.timeout = watchdog_timeout;               /* in seconds, 0->128 */   //time until watchdog reset
     config.pin = 20;                                //pin to be driven low upon reset. WDT1 holds low, WDT2 pulses low
     config.callback = myCallback;
@@ -167,9 +166,6 @@ void setup() {
   //   Serial.println(millis() - start_time);
   // }
 
-  while(1){
-    TX_CAN();
-  }
 
   if(mode == ""){
     measure_voltage();
@@ -284,35 +280,61 @@ void loop() {
 
   else if(mode == "drive"){
     Serial.println("Drive Mode Entered");
- 
 
-
-  const int time_inc = 0;
-    while(1){
+    //measurement buffers
+    unsigned int time_buffer[SD_interval];
+    float voltage_buffer[SD_interval/volt_interval][num_boards][num_cells];
+    float temp_buffer[SD_interval/temp_interval][num_boards][9]; 
+    float current_buffer[SD_interval/current_interval];
+    
+    int n = 0;    //time step number
+    bool new_voltage = false;
+    bool new_temp = false;
 
     CAN_message_t msg;
-    measure_voltage();
-    measure_temp();
-    measure_current();
-    reset_watchdog();
-    if(!memory_fault){
-      SD_data_write();
-    }
-    msg = RX_CAN();
-    if(msg.id == INV_TX_ID){
-      inv_voltage = float(msg.buf[0]*256 + msg.buf[1]);
-    }
-    if(inv_voltage < pack_voltage * 0.5){    //checks inverter voltage to see if tractive system voltage is dropping
-      mode = "standby";                         //enter standby mode if ready to drive is exited
-      //data_file_num = 0;
-      //check_memory();         //assign a new data file number in case RTD is entered agian
-      break;
-    }
-    delay(10);
-    }
-    while(millis() <= time_buffer[0] + time_step){
 
+    while(1){
+      time_buffer[0] = millis();
+      if(n%current_interval == 0){
+        measure_current();
+      }
+      if(n%volt_interval == 0){
+        measure_voltage();
+        Serial.println("New volt");
+        new_voltage = true;
+      }
+      if(n%temp_interval == 0){
+        Serial.println("New Temp");
+        measure_temp();
+        new_temp = true;
+      }
+      if(new_voltage && new_temp){
+        Serial.println("Reset_watchdog");
+        reset_watchdog();
+        new_voltage = false;
+        new_temp = false;
+      }
+      // if(!memory_fault){
+      //   SD_data_write();
+      // }
+
+      // msg = RX_CAN();
+      // if(msg.id == INV_TX_ID){
+      //   inv_voltage = float(msg.buf[0]*256 + msg.buf[1]);
+      // }
+      // if(inv_voltage < pack_voltage * 0.5){    //checks inverter voltage to see if tractive system voltage is dropping
+      //   mode = "standby";                         //enter standby mode if ready to drive is exited
+      //   //data_file_num = 0;
+      //   //check_memory();         //assign a new data file number in case RTD is entered agian
+      //   break;
+      // }
+      while(millis() <= time_buffer[0] + time_step){
+
+      }
+      n++;
+      Serial.println(n);
     }
+   
   }
 
   
@@ -756,6 +778,7 @@ void measure_voltage(){     //18 millisecond execution time
     }
   }
 
+  new_voltage = true;
 
   if(debug){
     Serial.println("Voltages:");
@@ -838,6 +861,8 @@ void measure_temp(bool open_wire_check){        //25 millisecond execution time
     }
   }
 
+  new_temp = true;
+
   if(debug){
     Serial.println("Tempearatures:");
     for(int i=0; i<num_boards; i++){
@@ -852,13 +877,18 @@ void measure_temp(bool open_wire_check){        //25 millisecond execution time
 
 bool reset_watchdog(){      //this needs to clear the voltage and temperature measurements after reading them
 
+  new_voltage = false;
+  new_temp = false;
+
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< num_cells; j++){
       if(cell_voltage[i][j] < OV && cell_voltage[i][j] > UV){
+        cell_voltage[i][j] = 0;         
         continue;
       }
       else{
           digitalWrite(20, LOW);
+          delay(1000);                    //delay to overcome debounce of shutdown circuit
           Serial.println("invalid voltage");
           Serial.println(cell_voltage[i][j]);
           return false;
@@ -869,17 +899,21 @@ bool reset_watchdog(){      //this needs to clear the voltage and temperature me
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j < 9; j++){
       if(cell_temp[i][j] > min_temp && cell_temp[i][j] < max_temp){
+        cell_temp[i][j] = min_temp;
         continue;
       }
       else{
           digitalWrite(20, LOW);
+          delay(1000);                //delay to overcome debounce of shutdown circuit
           Serial.print("invalid temp Board:  "); Serial.print(i+1); Serial.print("Num: "); Serial.println(j+1);
           return false;
       }
     }
   }
+  delay(1000);
   digitalWrite(20, HIGH);
   wdt.feed();  
+  Serial.println("Watchdog fed");
   return true;
 }
 
@@ -1178,6 +1212,7 @@ void discharge_cells(bool discharge[num_boards][18]){      //this function takes
 }
 
 void myCallback() {    
+  Serial.println("Callback called");
   measure_voltage();
   measure_temp();
   reset_watchdog();
