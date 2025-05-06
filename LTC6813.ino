@@ -76,6 +76,13 @@ float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
+//measurement buffers
+unsigned int time_buffer[SD_interval];
+float voltage_buffer[SD_interval/volt_interval][num_boards][num_cells];
+float temp_buffer[SD_interval/temp_interval][num_boards][9]; 
+float current_buffer[SD_interval/current_interval];
+
+
 void setup() {
   //open shutdown circuit
   pinMode(20, OUTPUT);
@@ -159,6 +166,10 @@ void setup() {
   //   measure_voltage();
   //   Serial.println(millis() - start_time);
   // }
+
+  while(1){
+    TX_CAN();
+  }
 
   if(mode == ""){
     measure_voltage();
@@ -274,7 +285,11 @@ void loop() {
   else if(mode == "drive"){
     Serial.println("Drive Mode Entered");
  
+
+
+  const int time_inc = 0;
     while(1){
+
     CAN_message_t msg;
     measure_voltage();
     measure_temp();
@@ -295,8 +310,12 @@ void loop() {
     }
     delay(10);
     }
+    while(millis() <= time_buffer[0] + time_step){
+
+    }
   }
 
+  
   else{       //debug mode
     digitalWrite(20, LOW);                  //open shutdown circuit in debug mode
     Serial.println("Debug Mode Entered");
@@ -527,12 +546,7 @@ void upadate_current_limit(){
   const int  discharge_curve_length = sizeof(discharge_points) / sizeof(discharge_points[0]);                              //length of each discharge curve
   const float max_capacity = discharge_points[0];                                                                           //maximum capacity of a single cell
   const int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
-
-
-
-
 }
-
 
 void SD_data_write() {
   String filename = "data" + String(data_file_num) + ".csv";     
@@ -836,7 +850,7 @@ void measure_temp(bool open_wire_check){        //25 millisecond execution time
   }
 }
 
-bool reset_watchdog(){
+bool reset_watchdog(){      //this needs to clear the voltage and temperature measurements after reading them
 
   for(int i = 0; i < num_boards; i++){
     for(int j = 0; j< num_cells; j++){
@@ -946,7 +960,8 @@ void TX_CAN(){
   delay(1);
   digitalWrite(CTX3, LOW);
   CAN_message_t BMS_data;
-  BMS_data.id = BMS_ID;
+  //BMS_data.id = BMS_ID;
+  BMS_data.id = 0x5;
   BMS_data.flags.extended = 0; 
   BMS_data.len = 8;     // Set the data length
 

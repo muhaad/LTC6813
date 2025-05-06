@@ -38,6 +38,14 @@ int ADC_mode = 0;     //integer 0-7 to set ADC sampling frequency
 #define wake_delay 2    //wake delay per board (milliseconds) to bring up power supply to voltage. Depends on Linear voltage regulator capacitance
 #define cell_RC 0.0001  //C pin filter RC time constant in milliseconds (R*C*1000)
 
+//task execution frequency
+const int time_step = 50;      //timestep in milliseconds
+const int volt_interval = 10;
+const int temp_interval = 500;
+const int current_interval = 1;
+const int CAN_interval = 500;
+const int SD_interval = 100;
+
 //SD Card
 float SD_card_size = 32;   //SD card size in Gb
 #endif
