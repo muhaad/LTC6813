@@ -171,7 +171,7 @@ void setup() {
         //can.setMBFilter(MB0, 0);  //Disable Inverter Mailbox
         break;
       }
-      else if(current >= 0.15){
+      else if(current >= 1){
         mode = "drive";
         break;
       }

@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 
-bool debug = 1;
+bool debug = 0;
 
 //Safe operating conditions
 const float max_temp = 60;
