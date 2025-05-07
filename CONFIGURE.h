@@ -5,27 +5,29 @@
 
 #include <stdint.h>
 
+bool debug = 1;
+
 //Safe operating conditions
 const float max_temp = 60;
 const float min_temp = 0;
-const float OV = 4.20;       //over-voltage limit (spelled with an "oh" not zero) (V)
+const float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
 const float UV = 2.8;       //under-voltage limit (V)
-const int watchdog_timeout = 5;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
+const int watchdog_timeout = 10;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
 
 //architecture
 const int num_boards = 4;
 const int num_cells = 17;       //cells per board
 
 //BMS operation mode. Leave as empty string to determine mode during runtime
-String mode = "drive";     //"", "charge", "standby", "drive", "debug"
+String mode = "";     //"", "charge", "standby", "drive", "debug"
 
 //CAN Bus Parameters
 uint16_t BMS_ID = 0x123;             //standard ID of BMS TX messages
-uint32_t INV_TX_ID = 0x0A0;         //CAN Message ID of message send from inverter of DC Bus Voltage (100 Hz frequency).
+uint32_t INV_TX_ID = 0x0A7;         //CAN Message ID of message send from inverter of DC Bus Voltage (100 Hz frequency).
 uint32_t CHG_TX_ID = 0x18FF50E5;    //CAN Message ID of messages sent from charger
 
 //charging parameters
-uint16_t CHG_voltage = 280;
+uint16_t CHG_voltage = 285;
 uint16_t CHG_current = 1;
 float _qt = 12.6 * 60; //total capacity (coulumbs): total capacity (Ah) * 60s/1hr
 
