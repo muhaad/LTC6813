@@ -75,6 +75,12 @@ float GPIO_open_wire[num_boards][9];
 bool overvoltage_flag[18];
 bool undervoltage_flag[18];
 
+//measurement buffers
+unsigned int time_buffer[SD_interval];
+float voltage_buffer[SD_interval/volt_interval][num_boards][num_cells];
+float temp_buffer[SD_interval/temp_interval][num_boards][9]; 
+float current_buffer[SD_interval/current_interval];
+
 void setup() {
   //open shutdown circuit
   pinMode(20, OUTPUT);
@@ -157,6 +163,7 @@ void setup() {
       measure_current();
       measure_voltage();
       measure_temp();
+      print_min_max();
       reset_watchdog();
       msg = RX_CAN();
       String input = Serial.readStringUntil('\n');
@@ -171,7 +178,7 @@ void setup() {
         //can.setMBFilter(MB0, 0);  //Disable Inverter Mailbox
         break;
       }
-      else if(current >= 1){
+      else if(current >= 0.5){
         mode = "drive";
         break;
       }
@@ -282,28 +289,24 @@ void loop() {
   else if(mode == "drive"){
     Serial.println("Drive Mode Entered");
 
-    //measurement buffers
-    unsigned int time_buffer[SD_interval];
-    float voltage_buffer[SD_interval/volt_interval][num_boards][num_cells];
-    float temp_buffer[SD_interval/temp_interval][num_boards][9]; 
-    float current_buffer[SD_interval/current_interval];
+    
     
     int n = 0;    //time step number
   
     CAN_message_t msg;
 
     while(1){
-      time_buffer[0] = millis();
+      time_buffer[n] = millis();
       if(n%current_interval == 0){
         measure_current();
-        current_buffer[n] = current;
+        current_buffer[int(n/current_interval)] = current;
       }
       if(n%volt_interval == 0){
         measure_voltage();
         Serial.println("New volt");
         for(int i = 0; i<num_boards;i++){
           for(int j = 0; j<num_cells; j++){
-            voltage_buffer[n][i][j] = cell_voltage[i][j];
+            voltage_buffer[int(n/volt_interval)][i][j] = cell_voltage[i][j];
           }
         }
       }
@@ -312,16 +315,17 @@ void loop() {
         measure_temp();
         for(int i = 0; i<num_boards;i++){
           for(int j = 0; j<9; j++){
-            temp_buffer[n][i][j] = cell_temp[i][j];
+            temp_buffer[int(n/temp_interval)][i][j] = cell_temp[i][j];
           }
         }
       }
       if(new_voltage && new_temp){
+        print_min_max();
         Serial.println("Reset_watchdog");
         reset_watchdog();
       }
       if(n%SD_interval == 0 && !memory_fault){
-        SD_data_write();
+        SD_buffer_write();
       }
 
       // msg = RX_CAN();
@@ -337,7 +341,7 @@ void loop() {
       while(millis() <= time_buffer[0] + time_step){
 
       }
-      if(n < SD_interval){
+      if(n < SD_interval - 1){
       n++;
       }
       else{
@@ -440,7 +444,7 @@ void read_ADC(){
 }
 
 
-void print_min_max(float* max_voltage){   //This function prints the min and max parameters
+void print_min_max(){   //This function prints the min and max parameters
   float min_cell_voltage = cell_voltage[0][0];
   float max_cell_voltage = cell_voltage[0][0];
   float min_cell_temp = cell_temp[0][0];
@@ -595,62 +599,121 @@ void upadate_current_limit(){
   const int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
 }
 
+void SD_buffer_write() {
+  String filename = "data" + String(data_file_num) + ".csv";     
+  File dataFile = SD.open(filename.c_str(), FILE_WRITE);
+  // error checking goes here
+  if (dataFile) {
+      for(int n = 0; n<SD_interval; n++){
+        dataFile.print("Voltage:\n");
+        if(n % volt_interval == 0){
+        for (int i = 0; i < num_boards; i++) {
+          for (int j = 0; j < num_cells; j++) {
+            dataFile.print(voltage_buffer[int(n/volt_interval)][i][j], 4);
+            dataFile.print(", ");
+          }
+          dataFile.print("\n");
+        }
+        }
+
+        if(n%temp_interval == 0){
+        dataFile.print("\nTemperature:\n");
+        for (int i = 0; i < num_boards; i++) {
+          for (int j = 0; j < 9; j++) {
+            dataFile.print(temp_buffer[int(n/temp_interval)][i][j], 2);
+            dataFile.print(", ");
+          }
+          dataFile.print("\n");
+        }
+        }
+        if(n%current_interval == 0){
+        //Current Measurement
+        dataFile.print("Current: ");
+        dataFile.print(current_buffer[int(n/current_interval)]);
+        dataFile.print("\n");
+        }
+
+        float curr_time_ms = (float)time_buffer[n];
+        
+        //format ms into HH:MM:SS
+        unsigned long seconds = curr_time_ms / 1000;
+        unsigned long minutes = seconds / 60;
+        unsigned long hours = minutes / 60;
+        seconds = seconds % 60;
+        minutes = minutes % 60;
+        hours = hours % 24; // This will keep the time within 24 hours
+        char time_string[9]; // HH:MM:SS is 8 characters + null terminator
+        sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
+
+        dataFile.print("\nTime:\n");
+
+        //time stamp
+        dataFile.print(time_string);
+        dataFile.println();
+
+        dataFile.close();
+        Serial.print("Time: ");
+        Serial.println(time_string);
+
+  }
+}
+}
 void SD_data_write() {
   String filename = "data" + String(data_file_num) + ".csv";     
   File dataFile = SD.open(filename.c_str(), FILE_WRITE);
   // error checking goes here
   if (dataFile) {
-    dataFile.print("Voltage:\n");
-    for (int i = 0; i < num_boards; i++) {
-      for (int j = 0; j < num_cells; j++) {
-        dataFile.print(cell_voltage[i][j], 4);
-        dataFile.print(", ");
-      }
-      dataFile.print("\n");
-    }
-
-    dataFile.print("\nTemperature:\n");
-    for (int i = 0; i < num_boards; i++) {
-      for (int j = 0; j < 9; j++) {
-        dataFile.print(cell_temp[i][j], 2);
-        dataFile.print(", ");
-      }
-      dataFile.print("\n");
-    }
-    //Current Measurement
-    dataFile.print("Current: ");
-    dataFile.print(current);
-    dataFile.print("\n");
-
-    float curr_time_ms = millis()-start_time;
+        dataFile.print("Voltage:\n");
+        for (int i = 0; i < num_boards; i++) {
+          for (int j = 0; j < num_cells; j++) {
+            dataFile.print(cell_voltage[i][j], 4);
+            dataFile.print(", ");
+          }
+          dataFile.print("\n");
+        }
+        
+        dataFile.print("\nTemperature:\n");
+        for (int i = 0; i < num_boards; i++) {
+          for (int j = 0; j < 9; j++) {
+            dataFile.print(cell_temp[i][j], 2);
+            dataFile.print(", ");
+          }
+          dataFile.print("\n");
+        }
     
-    //format ms into HH:MM:SS
-    unsigned long seconds = curr_time_ms / 1000;
-    unsigned long minutes = seconds / 60;
-    unsigned long hours = minutes / 60;
-    seconds = seconds % 60;
-    minutes = minutes % 60;
-    hours = hours % 24; // This will keep the time within 24 hours
-    char time_string[9]; // HH:MM:SS is 8 characters + null terminator
-    sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
+        //Current Measurement
+        dataFile.print("Current: ");
+        dataFile.print(current);
+        dataFile.print("\n");
 
-    dataFile.print("\nTime:\n");
+        float curr_time_ms = (float)(millis() - start_time);
+        
+        //format ms into HH:MM:SS
+        unsigned long seconds = curr_time_ms / 1000;
+        unsigned long minutes = seconds / 60;
+        unsigned long hours = minutes / 60;
+        seconds = seconds % 60;
+        minutes = minutes % 60;
+        hours = hours % 24; // This will keep the time within 24 hours
+        char time_string[9]; // HH:MM:SS is 8 characters + null terminator
+        sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
 
-    //time stamp
-    dataFile.print(time_string);
-    dataFile.println();
+        dataFile.print("\nTime:\n");
 
-    dataFile.close();
-    Serial.print("Time: ");
-    Serial.println(time_string);
-    //write to soc.txt
-    //update_soc(current, time_string);
-    //Serial.println("Data written to SD card");
-  } else {
+        //time stamp
+        dataFile.print(time_string);
+        dataFile.println();
+
+        dataFile.close();
+        Serial.print("Time: ");
+        Serial.println(time_string);
+  }
+  else {
     Serial.println("Error opening data.csv for writing");
     memory_fault = 1;
   }
-}
+      }
+
 
 void send_command(uint16_t command){
   uint8_t comm_arr[2];

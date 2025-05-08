@@ -5,10 +5,10 @@
 
 #include <stdint.h>
 
-bool debug = 0;
+bool debug = 1;
 
 //Safe operating conditions
-const float max_temp = 60;
+const float max_temp = 50;
 const float min_temp = 0;
 const float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
 const float UV = 2.8;       //under-voltage limit (V)
@@ -28,7 +28,7 @@ uint32_t CHG_TX_ID = 0x18FF50E5;    //CAN Message ID of messages sent from charg
 
 //charging parameters
 uint16_t CHG_voltage = 285;
-uint16_t CHG_current = 1;
+uint16_t CHG_current = 7;
 float _qt = 12.6 * 60; //total capacity (coulumbs): total capacity (Ah) * 60s/1hr
 
 //balancing parameters
@@ -46,7 +46,7 @@ const int volt_interval = 10;
 const int temp_interval = 25;
 const int current_interval = 1;
 const int CAN_interval = 500;
-const int SD_interval = 100;
+const int SD_interval = 50;
 
 //SD Card
 float SD_card_size = 32;   //SD card size in Gb
