@@ -25,7 +25,7 @@ def read_line():
             byte = ser.read()         # Read one byte
             char = byte.decode('utf-8', errors='ignore')  # Convert byte to string
             if char == '\n':
-                print(line)
+                #print(line)
                 return line.strip()   # Remove trailing spaces/newlines
             else:
                 line += char
@@ -43,16 +43,18 @@ if ser.is_open==True:
         line = ser.readline().decode('utf-8').strip()
         with open(f"data\{line}", 'w') as file:
 
-            # while(line.strip() != "done"):
-            #     line = ser.readline().decode('utf-8')
-            #     file.write(line)
-            #     print(line)
-
             while(line.strip() != "done"):
-                line = read_line()
+                line = ser.readline().decode('utf-8')
+                file.write(line)
+                ser.write(b'next line\n')
+                #print(line)
+
+            # while(line.strip() != "done"):
+            #     line = read_line()
+            #     print(line)
            
             file.close()
-            ser.write(b"next\n")
+            ser.write(b"next file\n")
 
 
 

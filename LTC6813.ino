@@ -480,8 +480,18 @@ void dumpDataToSerial() {
     while (entry.available()) {
       //String line = entry.readStringUntil('\n');
       //Serial.print(line);
-      Serial.write(entry.read());
+      char character = entry.read();
+      Serial.write(character);
+      //delayMicroseconds(500);
+    
+      while(character == '\n'){
+        String input = Serial.readStringUntil('\n');
+        input.trim();
+        if(input == "next line"){
+          break;
+        }
       }
+    }
   
     //SD.remove(entry.name());
     entry.close();
@@ -491,7 +501,7 @@ void dumpDataToSerial() {
     while(1){
     String input = Serial.readStringUntil('\n');
     input.trim();
-    if(input == "next"){
+    if(input == "next file"){
       break;
     }
   }
