@@ -28,7 +28,7 @@ const int chipSelect = BUILTIN_SDCARD;
 #define CS1 0   //chip select for ADC
 
 //counters
-unsigned int start_time = 0;
+unsigned int start_time = millis();
 unsigned int sense_watchdog_timer;   //senseboard watchdog timer. Sense boards will go to sleep after 2 seconds if no valid command with correct PEC is sent from master. 
 bool new_voltage = false;
 bool new_temp = false;
@@ -50,9 +50,7 @@ WDT_T4<WDT1> wdt;     //watchdog 1 holds output pin low until power-on-reset. Th
 
 // // Shared variables
 float current = 0;
-float currentSum = 0.0;
-int currentCount1 = 0;
-float averagedCurrent = 0.0;
+
 float current_offset = 0;
 
 //state of charge
@@ -81,6 +79,8 @@ float voltage_buffer[SD_interval/volt_interval][num_boards][num_cells];
 float temp_buffer[SD_interval/temp_interval][num_boards][9]; 
 float current_buffer[SD_interval/current_interval];
 
+
+
 void setup() {
   //open shutdown circuit
   pinMode(20, OUTPUT);
@@ -89,7 +89,6 @@ void setup() {
   delay(5000);      //delay upon startup should be use to make it easier to recover the teensy when runtime errors occurs
 
   //start timers
-  start_time = millis();
   sense_watchdog_timer = start_time - 5000; //initial sense_watchdog timer with expired watchdog time (T - 2000 milliseconds)
   
   Serial.begin(9600);
@@ -141,7 +140,6 @@ void setup() {
 
   //Bring up ADC
   initialize_ADC();
-  
 
     //current offset compensation
   measure_current();
@@ -153,6 +151,8 @@ void setup() {
   check_memory();       //must be called to use SD card
 
 //voltage poll and temperature poll take 16 and 24 milliseconds. The rest of the measure functions only take 1 or two milliseconds
+
+  //flash_leds();
 
   if(mode == ""){
     measure_voltage();
@@ -212,6 +212,7 @@ void loop() {
       charger_voltage = ((uint16_t) msg.buf[0]<<8 | (uint16_t) msg.buf[1])/10;
       charger_current = ((uint16_t) msg.buf[2]<<8 | (uint16_t) msg.buf[3])/10;
       Serial.println(charger_voltage);
+      Serial.println(pack_voltage);
       if(msg.id == CHG_TX_ID && msg.buf[4] == 0 && charger_voltage >= pack_voltage * 0.80){   //if can id matches charger and there are no charger faults AND precharge is complete
         break;
       }
@@ -220,13 +221,15 @@ void loop() {
     delay(1000);    //delay so that another Charger CAN message is sent to the BMS (so that an empty CAN buffer is not read which would raise a charger error)
 
     while(1){       //charge cycle
-      Serial.print("charge fault status: ");
-      Serial.println(charger_fault);
+      Serial.print("charge fault status: "); Serial.println(charger_fault);
       measure_voltage();
       measure_temp();
       measure_current();
-      Serial.print("current");
-      Serial.println(current);
+      Serial.print("current: ");  Serial.println(current);
+      Serial.print("Pack Voltage: "); Serial.println(pack_voltage);
+      if(!memory_fault){
+        SD_data_write();
+      }
       if(reset_watchdog()){
         msg = RX_CAN();
         charger_voltage = ((uint16_t) msg.buf[0]<<8 | (uint16_t) msg.buf[1])/10;
@@ -242,9 +245,6 @@ void loop() {
           Serial.println("Charger Error");
           charger_fault = 1;
         }
-      }
-      if(!memory_fault){
-        SD_data_write();
       }
       delay(1000);
     }
@@ -288,15 +288,12 @@ void loop() {
 
   else if(mode == "drive"){
     Serial.println("Drive Mode Entered");
-
-    
-    
     int n = 0;    //time step number
   
     CAN_message_t msg;
 
     while(1){
-      time_buffer[n] = millis();
+      time_buffer[n] = millis() - start_time;
       if(n%current_interval == 0){
         measure_current();
         current_buffer[int(n/current_interval)] = current;
@@ -325,7 +322,7 @@ void loop() {
         reset_watchdog();
       }
       if(n%SD_interval == 0 && !memory_fault){
-        SD_buffer_write();
+        SD_data_write();
       }
 
       // msg = RX_CAN();
@@ -338,7 +335,8 @@ void loop() {
       //   //check_memory();         //assign a new data file number in case RTD is entered agian
       //   break;
       // }
-      while(millis() <= time_buffer[0] + time_step){
+
+      while(millis() - start_time <= time_buffer[n] + time_step){     //this needs checked
 
       }
       if(n < SD_interval - 1){
@@ -474,37 +472,35 @@ void dumpDataToSerial() {
 
   File root = SD.open("/");
   File entry = root.openNextFile();
+  int file_num = 0;
   while (entry) {
-    Serial.println(entry.name());
+      if(file_num >= file_read_begin){      //begin with file at file_read_begin
+        Serial.println(entry.name());
+        while (entry.available()) {
+          char character = entry.read();
+          Serial.write(character);
 
-    while (entry.available()) {
-      //String line = entry.readStringUntil('\n');
-      //Serial.print(line);
-      char character = entry.read();
-      Serial.write(character);
-      //delayMicroseconds(500);
-    
-      while(character == '\n'){
-        String input = Serial.readStringUntil('\n');
-        input.trim();
-        if(input == "next line"){
-          break;
+          while(character == '\n'){       //block until confirmation from Python that line has been read
+            String input = Serial.readStringUntil('\n');
+            input.trim();
+            if(input == "next line"){
+              break;
+            }
+          }
+        }
+        Serial.println("done");
+
+        while(1){                        //block until Python is ready to read next file
+          String input = Serial.readStringUntil('\n');
+          input.trim();
+          if(input == "next file"){
+            break;
+          }
         }
       }
-    }
-  
-    //SD.remove(entry.name());
-    entry.close();
-    entry = root.openNextFile();
-    Serial.println("done");
-
-    while(1){
-    String input = Serial.readStringUntil('\n');
-    input.trim();
-    if(input == "next file"){
-      break;
-    }
-  }
+      entry.close();
+      entry = root.openNextFile();
+      file_num++;
   }
   root.close();
 
@@ -540,14 +536,14 @@ void check_memory(){    //this should check all files
     entry = root.openNextFile();
   }
   root.close();
-
+  Serial.print("Memory Usage: "); Serial.print(100*memory_usage/(SD_card_size*1e9)); Serial.println("%\n");
   if(memory_usage > 0.9*(SD_card_size*1e9)){
     Serial.println("SD card over 90% full");
     memory_fault = 1;
     return;
   }
   if(data_file_num == 0){
-    for(int i = 1; i < num_files + 3; i++){
+    for(int i = 1; i < num_files + 100; i++){
       String filename = "data" + String(i) + ".csv";
       if(!SD.exists(filename.c_str())){
         data_file_num = i;
@@ -609,121 +605,58 @@ void upadate_current_limit(){
   const int num_current_curves = sizeof(discharge_currents)/sizeof(discharge_currents[0]);      //number of discharge curves @ different currents
 }
 
-void SD_buffer_write() {
-  String filename = "data" + String(data_file_num) + ".csv";     
-  File dataFile = SD.open(filename.c_str(), FILE_WRITE);
-  // error checking goes here
-  if (dataFile) {
-      for(int n = 0; n<SD_interval; n++){
-        dataFile.print("Voltage:\n");
-        if(n % volt_interval == 0){
-        for (int i = 0; i < num_boards; i++) {
-          for (int j = 0; j < num_cells; j++) {
-            dataFile.print(voltage_buffer[int(n/volt_interval)][i][j], 4);
-            dataFile.print(", ");
-          }
-          dataFile.print("\n");
-        }
-        }
-
-        if(n%temp_interval == 0){
-        dataFile.print("\nTemperature:\n");
-        for (int i = 0; i < num_boards; i++) {
-          for (int j = 0; j < 9; j++) {
-            dataFile.print(temp_buffer[int(n/temp_interval)][i][j], 2);
-            dataFile.print(", ");
-          }
-          dataFile.print("\n");
-        }
-        }
-        if(n%current_interval == 0){
-        //Current Measurement
-        dataFile.print("Current: ");
-        dataFile.print(current_buffer[int(n/current_interval)]);
-        dataFile.print("\n");
-        }
-
-        float curr_time_ms = (float)time_buffer[n];
-        
-        //format ms into HH:MM:SS
-        unsigned long seconds = curr_time_ms / 1000;
-        unsigned long minutes = seconds / 60;
-        unsigned long hours = minutes / 60;
-        seconds = seconds % 60;
-        minutes = minutes % 60;
-        hours = hours % 24; // This will keep the time within 24 hours
-        char time_string[9]; // HH:MM:SS is 8 characters + null terminator
-        sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
-
-        dataFile.print("\nTime:\n");
-
-        //time stamp
-        dataFile.print(time_string);
-        dataFile.println();
-
-        dataFile.close();
-        Serial.print("Time: ");
-        Serial.println(time_string);
-
-  }
-}
-}
 void SD_data_write() {
   String filename = "data" + String(data_file_num) + ".csv";     
   File dataFile = SD.open(filename.c_str(), FILE_WRITE);
-  // error checking goes here
   if (dataFile) {
+      dataFile.print("Mode: "); dataFile.println(mode);
+      for(int n = 0; n<SD_interval; n++){
         dataFile.print("Voltage:\n");
-        for (int i = 0; i < num_boards; i++) {
-          for (int j = 0; j < num_cells; j++) {
-            dataFile.print(cell_voltage[i][j], 4);
-            dataFile.print(", ");
+        if(n % volt_interval == 0 || mode != "drive"){
+          for (int i = 0; i < num_boards; i++) {
+            for (int j = 0; j < num_cells; j++) {
+              if(mode == "drive")
+                dataFile.print(voltage_buffer[int(n/volt_interval)][i][j], 4);
+              else
+                dataFile.print(cell_voltage[i][j], 4);
+              dataFile.print(", ");
+            }
+            dataFile.print("\n");
           }
-          dataFile.print("\n");
         }
-        
-        dataFile.print("\nTemperature:\n");
-        for (int i = 0; i < num_boards; i++) {
-          for (int j = 0; j < 9; j++) {
-            dataFile.print(cell_temp[i][j], 2);
-            dataFile.print(", ");
+        if(n%temp_interval == 0 || mode != "drive"){
+          dataFile.print("\nTemperature:\n");
+          for (int i = 0; i < num_boards; i++) {
+            for (int j = 0; j < 9; j++) {
+              if(mode == "drive")
+                dataFile.print(temp_buffer[int(n/temp_interval)][i][j], 2);
+              else
+                dataFile.print(cell_temp[i][j], 2);
+              dataFile.print(", ");
+            }
+            dataFile.print("\n");
           }
-          dataFile.print("\n");
         }
-    
-        //Current Measurement
+        if(n%current_interval == 0 || mode != "drive"){
         dataFile.print("Current: ");
-        dataFile.print(current);
+        if(mode == "drive")
+          dataFile.print(current_buffer[int(n/current_interval)]);
+        else
+          dataFile.print(current);
         dataFile.print("\n");
-
-        float curr_time_ms = (float)(millis() - start_time);
-        
-        //format ms into HH:MM:SS
-        unsigned long seconds = curr_time_ms / 1000;
-        unsigned long minutes = seconds / 60;
-        unsigned long hours = minutes / 60;
-        seconds = seconds % 60;
-        minutes = minutes % 60;
-        hours = hours % 24; // This will keep the time within 24 hours
-        char time_string[9]; // HH:MM:SS is 8 characters + null terminator
-        sprintf(time_string, "%02lu:%02lu:%02lu", hours, minutes, seconds);
-
-        dataFile.print("\nTime:\n");
+        }
+        dataFile.print("Time:\n");
 
         //time stamp
-        dataFile.print(time_string);
-        dataFile.println();
-
-        dataFile.close();
-        Serial.print("Time: ");
-        Serial.println(time_string);
+        if(mode == "drive")
+          dataFile.println(time_buffer[n]);
+        else
+          dataFile.println(millis() - start_time);
+          break;
+    }
+    dataFile.close();
   }
-  else {
-    Serial.println("Error opening data.csv for writing");
-    memory_fault = 1;
-  }
-      }
-
+}
 
 void send_command(uint16_t command){
   uint8_t comm_arr[2];
@@ -789,8 +722,6 @@ void read_register_group(uint16_t command, uint8_t response[num_boards][6]){    
   }
 
   }
-
-
 
   pec = pec15_calc(6, response[0]);     //this needs fixed to include multiple boards
 
@@ -1036,6 +967,10 @@ void measure_current(){
   current = (volt-0.25)/(4.5)*(100)-50 - current_offset;   //this needs checked
   }
 
+  // if(debug){
+  //   Serial.print("current: "); Serial.println(current);
+  // }
+
   digitalWrite(CS1, HIGH);
 
 }
@@ -1070,12 +1005,10 @@ void charger_enable(bool enable){
 
   digitalWrite(CTX3, LOW);
 
-  if(message_sent && debug){
-    Serial.println("CAN message sent");
+  if(!message_sent){
+
   }
-  else if(debug){
-    Serial.println("CAN message TX Failed");
-  }
+
 }
 
 void TX_CAN(){
@@ -1092,14 +1025,14 @@ void TX_CAN(){
   digitalWrite(CTX3, LOW);
   CAN_message_t BMS_data;
   //BMS_data.id = BMS_ID;
-  BMS_data.id = 0x5;
+  BMS_data.id = BMS_ID;
   BMS_data.flags.extended = 0; 
   BMS_data.len = 8;     // Set the data length
 
   BMS_data.buf[0] = float_2_uint8_t(soc, 0, 100);               //SOC
-  BMS_data.buf[1] = float_2_uint8_t(12, 0, 12);                 //current
+  BMS_data.buf[1] = float_2_uint8_t(12, 0, 200);                 //current
   BMS_data.buf[2] = float_2_uint8_t(max_cell_voltage, 0, 5);    //max cell
-  BMS_data.buf[3] = float_2_uint8_t(min_cell_temp, 0, 150);
+  BMS_data.buf[3] = float_2_uint8_t(max_cell_temp, 0, 150);
   BMS_data.buf[4] = 0;
   BMS_data.buf[5] = 0;
   BMS_data.buf[6] = 0;
@@ -1135,7 +1068,7 @@ CAN_message_t RX_CAN(){     //grabs the first message in the FIFO.
   bool recieved = false;
   can.read(msg);
   //can.readMB(msg);
-  if(msg.id != 0){
+  if(msg.id != 0 && debug){
     Serial.print("ID: ");
     Serial.print(msg.id, HEX);
     Serial.println(" Data: ");
@@ -1145,8 +1078,6 @@ CAN_message_t RX_CAN(){     //grabs the first message in the FIFO.
       Serial.print(" ");
     }
     Serial.print('\n');
-    Serial.println(millis() - curr_time);
-    curr_time = millis();
   }
   return msg;   //always check the ID of the returned message. No messages in buffer returns 0 ID with 8 byte of zero data
 }
@@ -1251,7 +1182,7 @@ void sense_status(){              //really should be the measure die temp functi
 // }
 
 void flash_leds(){                        //Flashes each discharge resistor sequentially
-  int time_on = 0;                        //Time each led is on in milliseconds
+  int time_on =1000;                        //Time each led is on in milliseconds
   bool discharge[num_boards][18] = {0};  //'1': needs dischaged, '0': does not need discharged
   for(int i = num_boards; i>=0; i--){
     if(i % 4 < 2){
