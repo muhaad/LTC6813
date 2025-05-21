@@ -141,6 +141,12 @@ void setup() {
   //Bring up ADC
   initialize_ADC();
 
+  debug = 1;
+  while(1){
+    measure_current();
+    delay(1000);
+  }
+
     //current offset compensation
   measure_current();
   current_offset = current;
@@ -211,8 +217,8 @@ void loop() {
       msg = RX_CAN();
       charger_voltage = ((uint16_t) msg.buf[0]<<8 | (uint16_t) msg.buf[1])/10;
       charger_current = ((uint16_t) msg.buf[2]<<8 | (uint16_t) msg.buf[3])/10;
-      Serial.println(charger_voltage);
-      Serial.println(pack_voltage);
+      Serial.print("charger voltage: "); Serial.println(charger_voltage);
+      Serial.print("pack voltage: "); Serial.println(pack_voltage);
       if(msg.id == CHG_TX_ID && msg.buf[4] == 0 && charger_voltage >= pack_voltage * 0.80){   //if can id matches charger and there are no charger faults AND precharge is complete
         break;
       }
@@ -786,13 +792,12 @@ void measure_voltage(){     //18 millisecond execution time
   //delay(cell_RC * 6);
 
   poll_ADC(ADCV);   //initiate and wait for voltage measurement
-
+  pack_voltage = 0;
   for(int i=0; i*3 < num_cells; i++){         //i: cell group
     //Serial.print('i');
     //Serial.println(i);
     uint16_t curr_comm = cell_comm[i];                 //each command reads a sequential set of three cells from each board
     read_register_group(curr_comm, response);
-    pack_voltage = 0;
     for(int j=0; j < num_boards; j++){        //j:board number
       //Serial.print('j');
       //Serial.println(j);
@@ -967,9 +972,9 @@ void measure_current(){
   current = (volt-0.25)/(4.5)*(100)-50 - current_offset;   //this needs checked
   }
 
-  // if(debug){
-  //   Serial.print("current: "); Serial.println(current);
-  // }
+  if(debug){
+    Serial.print("current: "); Serial.println(current);
+  }
 
   digitalWrite(CS1, HIGH);
 

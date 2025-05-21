@@ -56,13 +56,3 @@ if ser.is_open==True:
            
             file.close()
             ser.write(b"next file\n")
-
-
-
-
-
-
-# while(line.strip() != "done"):
-#                 line = ser.readline().decode('utf-8')
-#                 file.write(line)
-#                 print(line)
