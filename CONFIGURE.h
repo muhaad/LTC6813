@@ -16,7 +16,7 @@ const float max_diff = 1.7;   //max difference between min and max cell for open
 const int watchdog_timeout = 0;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
 
 //architecture
-const int num_boards = 4;
+const int num_boards = 5;
 const int num_cells = 17;       //cells per board
 const int num_parrallel = 3;
 
@@ -29,7 +29,7 @@ uint32_t INV_TX_ID = 0x0A7;         //CAN Message ID of message send from invert
 uint32_t CHG_TX_ID = 0x18FF50E5;    //CAN Message ID of messages sent from charger
 
 //charging parameters
-uint16_t CHG_voltage = 285;
+uint16_t CHG_voltage = 356;
 uint16_t CHG_current = 4;
 float _qt = 12.6 * 60; //total capacity (coulumbs): total capacity (Ah) * 60s/1hr
 
