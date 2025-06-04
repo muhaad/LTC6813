@@ -53,4 +53,10 @@ const int SD_interval = 50;         //This needs to be the longest interval
 //SD Card
 float SD_card_size = 32;   //SD card size in Gb
 int file_read_begin = 63;  //Starting file number of file to dump through serial
+
+
+//Power Calculations
+const int FULL_POWER_LEVEL_KW = 60; //Peak Power level
+const int FULL_POWER_TEMP_C = 40; // Max temperature that has full power
+const int ZERO_POWER_TEMP_C = 50; // Power linearly decreases from full power to zero power at this temperature
 #endif

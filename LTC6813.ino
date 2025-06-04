@@ -324,6 +324,11 @@ void loop() {
       if(n%SD_interval == 0 && !memory_fault){
         SD_data_write();
       }
+      if(n%CAN_interval == 0){
+        //Serial.println("Send CAN");
+        TX_CAN();
+        //charger_enable(false);
+      }
 
       // msg = RX_CAN();
       // if(msg.id == INV_TX_ID){
@@ -1018,24 +1023,27 @@ void TX_CAN(){
   float max_cell_temp = cell_temp[0][0];
   min_max<num_boards,num_cells>(cell_voltage, &min_cell_voltage, &max_cell_voltage);
   min_max<num_boards,9>(cell_temp, &min_cell_temp, &max_cell_temp);
+  uint8_t inst_power_limit = power_limit(max_cell_voltage);
+  Serial.print("Power Limit: "); Serial.println(inst_power_limit);
 
   digitalWrite(STBY, LOW);
   digitalWrite(CTX3, HIGH);
   delay(1);
-  digitalWrite(CTX3, LOW);
+  
   CAN_message_t BMS_data;
+  //BMS_data.id = BMS_ID; b
   //BMS_data.id = BMS_ID;
-  BMS_data.id = BMS_ID;
-  BMS_data.flags.extended = 0; 
+  BMS_data.id = 0x1806E5F4;
+  BMS_data.flags.extended = 1; 
   BMS_data.len = 8;     // Set the data length
 
   BMS_data.buf[0] = float_2_uint8_t(soc, 0, 100);               //SOC
-  BMS_data.buf[1] = float_2_uint8_t(12, 0, 200);                 //current
+  BMS_data.buf[1] = float_2_uint8_t(12, 0, 200);                //current
   BMS_data.buf[2] = float_2_uint8_t(max_cell_voltage, 0, 5);    //max cell
-  BMS_data.buf[3] = float_2_uint8_t(max_cell_temp, 0, 150);
-  BMS_data.buf[4] = 0;
-  BMS_data.buf[5] = 0;
-  BMS_data.buf[6] = 0;
+  BMS_data.buf[3] = float_2_uint8_t(max_cell_temp, 0, 150);     // max cell temp
+  BMS_data.buf[4] = float_2_uint8_t(min_cell_voltage, 0, 5);    // min cell voltage
+  BMS_data.buf[5] = float_2_uint8_t(min_cell_temp, 0, 150);     // min cell temp
+  BMS_data.buf[6] = inst_power_limit;                           // BMS Suggested Power Limit
   BMS_data.buf[7] = 0;
 
   if(can.write(BMS_data)){
@@ -1044,7 +1052,20 @@ void TX_CAN(){
   else{
     Serial.println("CAN message TX Failed");
   }
+  digitalWrite(CTX3, LOW);
+}
 
+uint8_t power_limit(float max_cell_temp) {
+  if (max_cell_temp <= FULL_POWER_TEMP_C) {
+    return FULL_POWER_LEVEL_KW; 
+  }
+  else if (max_cell_temp >= ZERO_POWER_TEMP_C) {
+    return 0;
+  }
+  else {
+    float slope = -1.0 / (ZERO_POWER_TEMP_C - FULL_POWER_TEMP_C);
+    return float_2_uint8_t(FULL_POWER_LEVEL_KW * (slope * (max_cell_temp - FULL_POWER_TEMP_C) + 1.0), 0, 80);
+  }
 }
 
 uint8_t float_2_uint8_t(float float_val, float min, float max){   //float to uint8_t, clips values under/over min or max

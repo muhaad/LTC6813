@@ -68,4 +68,3 @@ template <size_t length> inline float interpolate(float arr_x[length], float arr
 }
 
 #endif
-
