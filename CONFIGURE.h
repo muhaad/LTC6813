@@ -8,9 +8,9 @@
 bool debug = 0;
 
 //Safe operating conditions
-const float max_temp = 50;
+const float max_temp = 55;
 const float min_temp = 0;
-const float OV = 4.15;       //over-voltage limit (spelled with an "oh" not zero) (V)
+const float OV = 4.12;       //over-voltage limit (spelled with an "oh" not zero) (V)
 const float UV = 2.5;       //under-voltage limit (V)
 const float max_diff = 1.7;   //max difference between min and max cell for open parallel cell detection
 const int watchdog_timeout = 0;  //watchdog timeout (in seconds). setting to 0 will DISABLE timer. 
@@ -52,7 +52,7 @@ const int SD_interval = 50;         //This needs to be the longest interval
 
 //SD Card
 float SD_card_size = 32;   //SD card size in Gb
-int file_read_begin = 63;  //Starting file number of file to dump through serial
+int file_read_begin = 127;  //Starting file number of file to dump through serial
 
 
 //Power Calculations

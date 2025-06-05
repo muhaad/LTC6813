@@ -962,14 +962,14 @@ void measure_current(){
   ADC = ADC << 8;
   ADC = ADC | SPI1.transfer(0b00000000);
   volt = (float)(ADC)/65535*5;
-  current = (volt-0.25)/(4.5)*(100)-50 - current_offset;   //this needs checked
+  current = (volt-2.5)/.0267 -current_offset;    //this needs checked
   
   if(current > 50){                        //so does this
   ADC = SPI1.transfer(0b00000000);
   ADC = ADC << 8;
   ADC = ADC | SPI1.transfer(0b00000000);
   volt = (float)(ADC)/65535*5;
-  current = (volt-0.25)/(4.5)*(100)-50 - current_offset;   //this needs checked
+  current = (volt-2.5)/.004 -current_offset;   //this needs checked
   }
 
   // if(debug){
@@ -1023,7 +1023,7 @@ void TX_CAN(){
   float max_cell_temp = cell_temp[0][0];
   min_max<num_boards,num_cells>(cell_voltage, &min_cell_voltage, &max_cell_voltage);
   min_max<num_boards,9>(cell_temp, &min_cell_temp, &max_cell_temp);
-  uint8_t inst_power_limit = power_limit(max_cell_voltage);
+  uint8_t inst_power_limit = power_limit(max_cell_temp);
   Serial.print("Power Limit: "); Serial.println(inst_power_limit);
 
   digitalWrite(STBY, LOW);
@@ -1033,7 +1033,7 @@ void TX_CAN(){
   CAN_message_t BMS_data;
   //BMS_data.id = BMS_ID; b
   //BMS_data.id = BMS_ID;
-  BMS_data.id = 0x1806E5F4;
+  BMS_data.id = 0x1806E5F5;
   BMS_data.flags.extended = 1; 
   BMS_data.len = 8;     // Set the data length
 
@@ -1047,7 +1047,7 @@ void TX_CAN(){
   BMS_data.buf[7] = 0;
 
   if(can.write(BMS_data)){
-    Serial.println("CAN message sent");
+    Serial.println("CAN message sent 2");
   }
   else{
     Serial.println("CAN message TX Failed");
@@ -1277,9 +1277,11 @@ void wakeup_sleep(uint8_t total_ic) //Number of ICs in the system. This function
 	for (int i =0; i<total_ic; i++)
 	{
 	   digitalWrite(CS, LOW);
-     delayMicroseconds(300);
+     //delayMicroseconds(300);
+     delay(1);
 	   digitalWrite(CS, HIGH);
-     delayMicroseconds(10);
+     //delayMicroseconds(10);
+     delay(1);
 	}
 }
 
