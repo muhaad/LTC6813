@@ -143,8 +143,8 @@ void setup() {
 
   debug = 1;
   while(1){
-    measure_current();
-    delay(1000);
+    read_ADC();
+    //delay(1000);
   }
 
     //current offset compensation
